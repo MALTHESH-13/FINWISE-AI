@@ -3,12 +3,40 @@ let currentUser = null;
 let currentPersona = 'salaried';
 let currentProfileData = null;
 let momChartInstance = null;
-let forecastChartInstance = null;
 let momChartType = 'bar'; // 'bar' or 'line'
 let narrationViewMode = 'cleaned'; // 'cleaned' or 'raw'
 let goalsChatHistory = [];
 let copilotChatHistory = [];
 let dipAutoMessageSent = false;
+
+// Calendar navigation state
+let currentCalYear = 2026;
+let currentCalMonth = 11; // 1-indexed (11 = Nov)
+let calendarCache = null;
+
+// Category colors for chips and dots (100% light mode)
+const CATEGORY_COLORS = {
+  'Food': { bg: '#FEF3C7', text: '#92400E' },
+  'Groceries': { bg: '#ECFCCB', text: '#3F6212' },
+  'Shopping': { bg: '#FCE7F3', text: '#9D174D' },
+  'Housing': { bg: '#E0E7FF', text: '#3730A3' },
+  'Subscriptions': { bg: '#EDE9FE', text: '#5B21B6' },
+  'Utilities': { bg: '#CCFBF1', text: '#115E59' },
+  'Phone/Data': { bg: '#E0F2FE', text: '#075985' },
+  'Transport': { bg: '#FFEDD5', text: '#9A3412' },
+  'Health/Fitness': { bg: '#DCFCE7', text: '#166534' },
+  'Insurance': { bg: '#F1F5F9', text: '#334155' },
+  'Loan/EMI': { bg: '#FEE2E2', text: '#991B1B' },
+  'Entertainment': { bg: '#FAE8FF', text: '#86198F' },
+  'Income': { bg: '#D1FAE5', text: '#065F46' },
+  'Savings': { bg: '#EDE9FE', text: '#4338CA' },
+  'Other': { bg: '#F3F4F6', text: '#374151' }
+};
+
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'
+];
 
 // Format INR currency
 function formatINR(val) {
@@ -53,6 +81,20 @@ async function authFetch(url, options = {}) {
   }
 }
 
+// Initialize light mode Chart.js defaults
+if (window.Chart) {
+  Chart.defaults.color = '#374151';
+  Chart.defaults.font.family = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+  if (Chart.defaults.plugins && Chart.defaults.plugins.tooltip) {
+    Chart.defaults.plugins.tooltip.backgroundColor = '#FFFFFF';
+    Chart.defaults.plugins.tooltip.titleColor = '#111827';
+    Chart.defaults.plugins.tooltip.bodyColor = '#374151';
+    Chart.defaults.plugins.tooltip.borderColor = '#E5E7EB';
+    Chart.defaults.plugins.tooltip.borderWidth = 1;
+    Chart.defaults.plugins.tooltip.boxPadding = 4;
+  }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   // Check auth
   const authRes = await authFetch('/api/auth/me');
@@ -74,6 +116,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Setup statement upload (drag & drop and file input)
   setupStatementUpload();
 
+  // Setup calendar controls (month navigation & day side panel)
+  setupCalendarControls();
+
   // Setup dashboard controls (MoM toggle, etc.)
   setupDashboardControls();
 
@@ -86,7 +131,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Setup limits editor
   setupBudgetTab();
 
-  // Setup simulator
+  // Setup deterministic simulator
   setupSimulatorTab();
 
   // Setup floating copilot chat
@@ -123,6 +168,10 @@ function setupNavigationTabs() {
 
       if (targetId === 'tab-goals') window.location.hash = '#/goals';
       else if (targetId === 'tab-dashboard') window.location.hash = '#/dashboard';
+      else if (targetId === 'tab-transactions') window.location.hash = '#/transactions';
+      else if (targetId === 'tab-recurring') window.location.hash = '#/recurring';
+      else if (targetId === 'tab-budget') window.location.hash = '#/budget';
+      else if (targetId === 'tab-simulator') window.location.hash = '#/simulator';
 
       // Refresh charts when switching to tabs
       if (targetId === 'tab-dashboard' && momChartInstance) {
@@ -143,57 +192,67 @@ function handleHashRoute() {
     switchTab('tab-goals');
   } else if (hash === '#/transactions') {
     switchTab('tab-transactions');
+  } else if (hash === '#/recurring') {
+    switchTab('tab-recurring');
+  } else if (hash === '#/budget') {
+    switchTab('tab-budget');
   } else if (hash === '#/simulator') {
     switchTab('tab-simulator');
+  } else {
+    switchTab('tab-dashboard');
   }
 }
 
-// Persona & Onboarding Setup
+// Persona selection, switching and onboarding
 function setupPersonaControls() {
   const btnSalaried = document.getElementById('btn-persona-salaried');
   const btnBusiness = document.getElementById('btn-persona-business');
   const btnEditProfile = document.getElementById('btn-edit-profile');
 
-  btnSalaried.addEventListener('click', async () => {
-    await switchPersona('salaried');
-  });
-
-  btnBusiness.addEventListener('click', async () => {
-    await switchPersona('business');
-  });
+  btnSalaried.addEventListener('click', () => switchPersona('salaried'));
+  btnBusiness.addEventListener('click', () => switchPersona('business'));
 
   btnEditProfile.addEventListener('click', () => {
     openProfileModal(currentPersona, currentProfileData ? currentProfileData.profile : null);
   });
 
-  // Landing modal buttons
-  document.getElementById('card-choose-salaried').querySelector('button').addEventListener('click', async () => {
-    document.getElementById('persona-landing-modal').style.display = 'none';
-    await switchPersona('salaried');
-  });
+  // Landing choice cards
+  const cardSalaried = document.getElementById('card-choose-salaried');
+  const cardBusiness = document.getElementById('card-choose-business');
+  if (cardSalaried) {
+    cardSalaried.addEventListener('click', () => {
+      document.getElementById('persona-landing-modal').style.display = 'none';
+      switchPersona('salaried');
+    });
+  }
+  if (cardBusiness) {
+    cardBusiness.addEventListener('click', () => {
+      document.getElementById('persona-landing-modal').style.display = 'none';
+      switchPersona('business');
+    });
+  }
 
-  document.getElementById('card-choose-business').querySelector('button').addEventListener('click', async () => {
-    document.getElementById('persona-landing-modal').style.display = 'none';
-    await switchPersona('business');
-  });
-
-  // Setup form
-  const safetyRange = document.getElementById('setup-safety-buffer');
-  const safetyVal = document.getElementById('safety-buffer-val');
-  safetyRange.addEventListener('input', () => {
-    safetyVal.textContent = Math.round(parseFloat(safetyRange.value) * 100) + '%';
-  });
-
-  // Add revenue row button
-  document.getElementById('btn-add-revenue-row').addEventListener('click', () => {
-    addRevenueRow('', 0);
-  });
-
-  // Form submit
-  document.getElementById('profile-setup-form').addEventListener('submit', async (e) => {
+  // Profile setup modal form
+  const profileForm = document.getElementById('profile-setup-form');
+  profileForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     await handleProfileSave();
   });
+
+  // Safety buffer slider feedback
+  const bufferSlider = document.getElementById('setup-safety-buffer');
+  const bufferVal = document.getElementById('safety-buffer-val');
+  if (bufferSlider && bufferVal) {
+    bufferSlider.addEventListener('input', () => {
+      bufferVal.textContent = Math.round(bufferSlider.value * 100) + '%';
+    });
+  }
+
+  // Add revenue row button for business
+  const btnAddRev = document.getElementById('btn-add-revenue-row');
+  if (btnAddRev) {
+    btnAddRev.addEventListener('click', () => addRevenueRow('', ''));
+  }
 }
 
 function addRevenueRow(monthStr, amountVal) {
@@ -251,8 +310,14 @@ function openProfileModal(persona, existingData) {
         addRevenueRow('2026-10', 170000);
       }
     }
+
+    // Monthly savings transfer (both personas)
+    document.getElementById('setup-savings-amount').value = existingData.monthly_savings_amount || 0;
+    document.getElementById('setup-savings-day').value = existingData.monthly_savings_day || 30;
   } else {
     document.getElementById('setup-name').value = currentUser.name || '';
+    document.getElementById('setup-savings-amount').value = 0;
+    document.getElementById('setup-savings-day').value = 30;
   }
 
   modal.style.display = 'flex';
@@ -273,7 +338,7 @@ async function handleProfileSave() {
   } else {
     payload.business_type = document.getElementById('setup-business-type').value.trim();
     payload.safety_buffer = parseFloat(document.getElementById('setup-safety-buffer').value) || 0.15;
-    
+
     const rows = document.querySelectorAll('#revenue-history-rows .revenue-row');
     const revs = [];
     rows.forEach(r => {
@@ -283,6 +348,10 @@ async function handleProfileSave() {
     });
     payload.revenue_history = revs;
   }
+
+  // Monthly savings transfer
+  payload.monthly_savings_amount = parseFloat(document.getElementById('setup-savings-amount').value) || 0.0;
+  payload.monthly_savings_day = parseInt(document.getElementById('setup-savings-day').value) || 30;
 
   const res = await authFetch('/api/profile', {
     method: 'POST',
@@ -317,18 +386,15 @@ function updatePersonaHeaderUI(persona) {
   const btnSalaried = document.getElementById('btn-persona-salaried');
   const btnBusiness = document.getElementById('btn-persona-business');
   const subTitle = document.getElementById('header-persona-subtitle');
-  const chipBiz = document.getElementById('chip-biz-tips');
 
   if (persona === 'salaried') {
     btnSalaried.classList.add('active');
     btnBusiness.classList.remove('active');
-    subTitle.textContent = 'Salaried Cashflow & Investments';
-    if (chipBiz) chipBiz.style.display = 'none';
+    subTitle.textContent = 'Salaried Cashflow Calendar & Goals';
   } else {
     btnBusiness.classList.add('active');
     btnSalaried.classList.remove('active');
-    subTitle.textContent = 'Small Business Cashflow & Reserve Engine';
-    if (chipBiz) chipBiz.style.display = 'inline-block';
+    subTitle.textContent = 'Small Business Cashflow Calendar & Reserve Engine';
   }
 }
 
@@ -378,40 +444,32 @@ function setupStatementUpload() {
   dropzone.addEventListener('drop', async (e) => {
     const files = e.dataTransfer.files;
     if (files.length > 0) {
-      await uploadStatementFile(files[0]);
+      await handleFileUpload(files[0]);
     }
   });
 
   fileInput.addEventListener('change', async () => {
     if (fileInput.files.length > 0) {
-      await uploadStatementFile(fileInput.files[0]);
-      fileInput.value = '';
+      await handleFileUpload(fileInput.files[0]);
     }
   });
 }
 
-async function uploadStatementFile(file) {
-  if (!file.name.toLowerCase().endsWith('.csv')) {
-    alert('Please upload a CSV bank statement.');
+async function handleFileUpload(file) {
+  if (!file.name.endsWith('.csv')) {
+    alert('Please upload a valid CSV bank statement.');
     return;
   }
 
   const formData = new FormData();
   formData.append('file', file);
 
-  const res = await authFetch('/api/upload', {
+  const res = await authFetch('/api/statement/upload', {
     method: 'POST',
     body: formData
   });
 
   if (res && res.ok) {
-    const data = await res.json();
-    let msg = `Successfully imported ${data.count} transactions!`;
-    if (data.warnings && data.warnings.length > 0) {
-      msg += ` (${data.warnings.length} rows skipped with warnings)`;
-    }
-    console.log(msg);
-    // Refresh all panels immediately without reload
     await refreshAllDashboardPanels();
   } else {
     const err = await res.json();
@@ -422,53 +480,326 @@ async function uploadStatementFile(file) {
 // Refresh all dashboard components immediately without page reload
 async function refreshAllDashboardPanels() {
   await Promise.all([
-    loadProfileBaselineCard(),
+    loadCalendar(),
     loadCommitments(),
     loadMoMComparison(),
-    loadForecastChart(),
     loadTransactions(),
     loadBudgetLimits(),
-    loadAccuracyAndAnomalies(),
-    checkBusinessDip(),
-    loadAIInsights()
+    loadAnomaliesTable(),
+    checkBusinessDip()
   ]);
 }
 
-// Baseline Stable Monthly Income Card
-async function loadProfileBaselineCard() {
-  const res = await authFetch('/api/profile');
+// ==========================================================================
+// SAMSUNG-CALENDAR-STYLE MONTH GRID & KPI STRIP
+// ==========================================================================
+
+function setupCalendarControls() {
+  document.getElementById('cal-prev-btn').addEventListener('click', () => {
+    currentCalMonth--;
+    if (currentCalMonth < 1) {
+      currentCalMonth = 12;
+      currentCalYear--;
+    }
+    loadCalendar();
+  });
+
+  document.getElementById('cal-next-btn').addEventListener('click', () => {
+    currentCalMonth++;
+    if (currentCalMonth > 12) {
+      currentCalMonth = 1;
+      currentCalYear++;
+    }
+    loadCalendar();
+  });
+
+  document.getElementById('cal-today-btn').addEventListener('click', () => {
+    currentCalYear = 2026;
+    currentCalMonth = 11;
+    loadCalendar();
+  });
+
+  // Close day details side panel
+  document.getElementById('btn-close-day-panel').addEventListener('click', closeDayDetailPanel);
+  document.getElementById('cal-panel-backdrop').addEventListener('click', closeDayDetailPanel);
+
+  // Submit quick add transaction from panel
+  document.getElementById('panel-add-tx-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const date = document.getElementById('new-tx-date').value;
+    const description = document.getElementById('new-tx-desc').value.trim();
+    const amount = parseFloat(document.getElementById('new-tx-amount').value);
+    const type = document.getElementById('new-tx-type').value;
+
+    if (!date || !description || isNaN(amount) || amount <= 0) return;
+
+    const res = await authFetch('/api/transactions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date, description, amount, type })
+    });
+
+    if (res && res.ok) {
+      document.getElementById('new-tx-desc').value = '';
+      document.getElementById('new-tx-amount').value = '';
+      closeDayDetailPanel();
+      await refreshAllDashboardPanels();
+    } else {
+      alert('Failed to add transaction.');
+    }
+  });
+}
+
+function closeDayDetailPanel() {
+  document.getElementById('cal-side-panel').style.display = 'none';
+  document.getElementById('cal-panel-backdrop').style.display = 'none';
+}
+
+async function loadCalendar(monthStr) {
+  if (!monthStr) {
+    monthStr = `${currentCalYear}-${String(currentCalMonth).padStart(2, '0')}`;
+  }
+
+  const res = await authFetch(`/api/calendar?month=${monthStr}`);
   if (!res) return;
   const data = await res.json();
-  currentProfileData = data;
+  calendarCache = data;
 
-  const titleEl = document.getElementById('baseline-income-title');
-  const valEl = document.getElementById('metric-baseline-income');
-  const tooltipDesc = document.getElementById('tooltip-formula-desc');
+  // Update KPI strip
+  const s = data.summary || {};
+  document.getElementById('kpi-current-balance').textContent = formatINR(s.balance);
+  document.getElementById('kpi-month-income').textContent = formatINR(s.income);
+  document.getElementById('kpi-month-spent').textContent = formatINR(s.spent);
+  document.getElementById('kpi-reserved-remaining').textContent = formatINR(s.reserved_remaining);
+  document.getElementById('kpi-left-to-spend').textContent = formatINR(s.left_to_spend);
 
-  if (data.persona === 'salaried') {
-    titleEl.textContent = 'Salaried Baseline Income';
-    valEl.textContent = formatINR(data.baseline_income);
-    tooltipDesc.innerHTML = `
-      <strong>Formula:</strong> Salary + Secondary Income<br>
-      <strong>Salary:</strong> ${formatINR(data.calculation_details?.inputs?.salary || 0)}<br>
-      <strong>Secondary:</strong> ${formatINR(data.calculation_details?.inputs?.secondary_income || 0)} (${escapeHtml(data.calculation_details?.inputs?.secondary_label || 'None')})<br>
-      <strong>Total:</strong> ${formatINR(data.baseline_income)}
-    `;
+  // Update Month Title
+  document.getElementById('cal-month-title').textContent = `${MONTH_NAMES[currentCalMonth - 1]} ${currentCalYear}`;
+
+  // Check empty state
+  const emptyPrompt = document.getElementById('calendar-empty-prompt');
+  const hasAnyRecords = data.days && data.days.some(d => d.spend.length > 0 || d.income.length > 0 || d.reserved.length > 0);
+  if (!hasAnyRecords) {
+    emptyPrompt.style.display = 'flex';
   } else {
-    titleEl.textContent = 'Stable Monthly Income Baseline';
-    valEl.textContent = formatINR(data.baseline_income);
-    const inp = data.calculation_details?.inputs || {};
-    tooltipDesc.innerHTML = `
-      <strong>Formula:</strong> Rolling mean of last 3 months revenue × (1 - safety buffer)<br>
-      <strong>Months Considered:</strong> ${inp.months ? inp.months.join(', ') : 'None'}<br>
-      <strong>Rolling Mean:</strong> ${formatINR(inp.rolling_mean || 0)}<br>
-      <strong>Safety Buffer:</strong> ${inp.safety_buffer_pct || 15}%<br>
-      <strong>Baseline Result:</strong> ${formatINR(data.baseline_income)}
+    emptyPrompt.style.display = 'none';
+  }
+
+  renderCalendarGrid(data);
+}
+
+function renderCalendarGrid(data) {
+  const grid = document.getElementById('calendar-grid');
+  grid.innerHTML = '';
+
+  const firstDayOfWeek = new Date(currentCalYear, currentCalMonth - 1, 1).getDay(); // 0 = Sun, ..., 6 = Sat
+  const daysInCurrentMonth = new Date(currentCalYear, currentCalMonth, 0).getDate();
+  const daysInPrevMonth = new Date(currentCalYear, currentCalMonth - 1, 0).getDate();
+
+  // Create dictionary of days
+  const daysMap = {};
+  if (data.days) {
+    data.days.forEach(d => {
+      daysMap[d.day] = d;
+    });
+  }
+
+  // Leading days from previous month
+  for (let i = 0; i < firstDayOfWeek; i++) {
+    const prevDayNum = daysInPrevMonth - firstDayOfWeek + 1 + i;
+    const prevCell = document.createElement('div');
+    prevCell.className = 'cal-day-cell other-month';
+    prevCell.innerHTML = `
+      <div class="cal-day-header">
+        <span class="cal-date-number">${prevDayNum}</span>
+      </div>
     `;
+    grid.appendChild(prevCell);
+  }
+
+  // Days of current month (1..daysInCurrentMonth)
+  for (let day = 1; day <= daysInCurrentMonth; day++) {
+    const dayOfWeek = (firstDayOfWeek + day - 1) % 7;
+    const dateStr = `${currentCalYear}-${String(currentCalMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const dayData = daysMap[day] || { spend: [], income: [], reserved: [], totals: { spent: 0, income: 0, reserved: 0 }, has_anomaly: false };
+
+    const isToday = (currentCalYear === 2026 && currentCalMonth === 11 && day === 15);
+
+    const cell = document.createElement('div');
+    cell.className = 'cal-day-cell';
+    cell.setAttribute('data-date', dateStr);
+
+    let dateNumClasses = 'cal-date-number';
+    if (dayOfWeek === 0) dateNumClasses += ' sunday';
+    if (dayOfWeek === 6) dateNumClasses += ' saturday';
+    if (isToday) dateNumClasses += ' today';
+
+    const anomalyDotHtml = dayData.has_anomaly ? `<span class="cal-anomaly-indicator" title="Unusual transaction detected"></span>` : '';
+
+    // Collect chips:
+    // a) Income items
+    // b) Spend items
+    // c) Reserved items (Paid vs Reserved)
+    const allItems = [];
+    dayData.income.forEach(item => allItems.push({ kind: 'income', item }));
+    dayData.spend.forEach(item => allItems.push({ kind: 'spend', item }));
+    dayData.reserved.forEach(item => allItems.push({ kind: 'reserved', item }));
+
+    const maxChips = 3;
+    const visibleChips = allItems.slice(0, maxChips);
+    const overflowCount = allItems.length - maxChips;
+
+    let chipsHtml = visibleChips.map(c => {
+      if (c.kind === 'income') {
+        return `<div class="cal-chip income-chip" title="Income: ${escapeHtml(c.item.merchant)}">+₹${Math.round(c.item.amount)} ${escapeHtml(c.item.merchant)}</div>`;
+      } else if (c.kind === 'spend') {
+        const catCol = CATEGORY_COLORS[c.item.category] || CATEGORY_COLORS['Other'];
+        return `<div class="cal-chip spend-chip" style="background:${catCol.bg};color:${catCol.text};" title="${escapeHtml(c.item.category)}: ${escapeHtml(c.item.merchant)}">${escapeHtml(c.item.merchant)} ₹${Math.round(c.item.amount)}</div>`;
+      } else if (c.kind === 'reserved') {
+        if (c.item.status === 'Paid') {
+          return `<div class="cal-chip paid-chip" title="Paid: ${escapeHtml(c.item.name)}">✓ ${escapeHtml(c.item.name)} ₹${Math.round(c.item.amount)}</div>`;
+        } else {
+          return `<div class="cal-chip reserved-chip" title="Reserved: ${escapeHtml(c.item.name)}">🔒 ${escapeHtml(c.item.name)} ₹${Math.round(c.item.amount)}</div>`;
+        }
+      }
+      return '';
+    }).join('');
+
+    if (overflowCount > 0) {
+      chipsHtml += `<div class="cal-chip more-chip">+${overflowCount} more</div>`;
+    }
+
+    // Dots for 375px mobile view
+    let dotsHtml = allItems.slice(0, 6).map(c => {
+      if (c.kind === 'income') return `<span class="cal-dot" style="background:#16A34A;" title="Income"></span>`;
+      if (c.kind === 'spend') {
+        const catCol = CATEGORY_COLORS[c.item.category] || CATEGORY_COLORS['Other'];
+        return `<span class="cal-dot" style="background:${catCol.text};" title="${escapeHtml(c.item.category)}"></span>`;
+      }
+      if (c.kind === 'reserved') {
+        return c.item.status === 'Paid'
+          ? `<span class="cal-dot" style="background:#3730A3;" title="Paid commitment"></span>`
+          : `<span class="cal-dot" style="background:#9CA3AF;" title="Reserved bill"></span>`;
+      }
+      return '';
+    }).join('');
+
+    cell.innerHTML = `
+      <div class="cal-day-header">
+        <span class="${dateNumClasses}">${day}</span>
+        ${anomalyDotHtml}
+      </div>
+      <div class="cal-chips-list">
+        ${chipsHtml}
+      </div>
+      <div class="cal-dots-container">
+        ${dotsHtml}
+      </div>
+    `;
+
+    cell.addEventListener('click', () => openDayDetailPanel(dateStr, dayData));
+    grid.appendChild(cell);
+  }
+
+  // Trailing days from next month to complete 6-row (42 cells) or 5-row grid
+  const totalRendered = firstDayOfWeek + daysInCurrentMonth;
+  const targetTotal = totalRendered > 35 ? 42 : 35;
+  const trailingCount = targetTotal - totalRendered;
+
+  for (let t = 1; t <= trailingCount; t++) {
+    const nextCell = document.createElement('div');
+    nextCell.className = 'cal-day-cell other-month';
+    nextCell.innerHTML = `
+      <div class="cal-day-header">
+        <span class="cal-date-number">${t}</span>
+      </div>
+    `;
+    grid.appendChild(nextCell);
   }
 }
 
-// Commitments
+function openDayDetailPanel(dateStr, dayData) {
+  const panel = document.getElementById('cal-side-panel');
+  const backdrop = document.getElementById('cal-panel-backdrop');
+
+  // Format date header nicely
+  try {
+    const dObj = new Date(dateStr + 'T00:00:00');
+    const options = { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric' };
+    document.getElementById('panel-date-title').textContent = dObj.toLocaleDateString('en-US', options);
+  } catch (e) {
+    document.getElementById('panel-date-title').textContent = dateStr;
+  }
+
+  document.getElementById('new-tx-date').value = dateStr;
+
+  // Day totals
+  document.getElementById('panel-day-spent').textContent = formatINR(dayData.totals.spent);
+  document.getElementById('panel-day-income').textContent = formatINR(dayData.totals.income);
+  document.getElementById('panel-day-reserved').textContent = formatINR(dayData.totals.reserved);
+
+  // Transactions list
+  const txContainer = document.getElementById('panel-transactions-list');
+  const allTxs = [...dayData.income, ...dayData.spend];
+
+  if (allTxs.length === 0) {
+    txContainer.innerHTML = '<p class="text-sm text-muted">No transactions on this date.</p>';
+  } else {
+    txContainer.innerHTML = allTxs.map(t => {
+      const isCredit = (t.category === 'Income');
+      const amtStr = (isCredit ? '+' : '-') + formatINR(t.amount);
+      const amtClass = isCredit ? 'text-emerald' : 'text-red';
+      const catCol = CATEGORY_COLORS[t.category] || CATEGORY_COLORS['Other'];
+      const anomBadge = t.is_anomaly ? `<span class="badge badge-danger">Unusual Spike</span>` : '';
+
+      return `
+        <div class="day-tx-card">
+          <div class="flex-between">
+            <span class="tx-merchant"><strong>${escapeHtml(t.merchant)}</strong></span>
+            <span class="tx-amount ${amtClass} font-bold">${amtStr}</span>
+          </div>
+          <div class="flex-between" style="margin-top: 4px;">
+            <span class="badge" style="background:${catCol.bg};color:${catCol.text};">${escapeHtml(t.category)}</span>
+            ${anomBadge}
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  // Reserved list
+  const resContainer = document.getElementById('panel-reserved-list');
+  if (dayData.reserved.length === 0) {
+    resContainer.innerHTML = '<p class="text-sm text-muted">No scheduled bills or commitments.</p>';
+  } else {
+    resContainer.innerHTML = dayData.reserved.map(r => {
+      const statusBadge = r.status === 'Paid'
+        ? `<span class="badge badge-success">✓ Paid</span>`
+        : `<span class="badge badge-warning">🔒 Reserved</span>`;
+
+      return `
+        <div class="day-tx-card" style="border-left: 3px solid ${r.status === 'Paid' ? '#16A34A' : '#D97706'};">
+          <div class="flex-between">
+            <span class="tx-merchant"><strong>${escapeHtml(r.name)}</strong></span>
+            <span class="tx-amount font-bold">${formatINR(r.amount)}</span>
+          </div>
+          <div class="flex-between" style="margin-top: 4px;">
+            <span class="badge badge-info">${escapeHtml(r.category)}</span>
+            ${statusBadge}
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  backdrop.style.display = 'block';
+  panel.style.display = 'flex';
+}
+
+// ==========================================================================
+// COMMITMENTS & MOM CHART (100% LIGHT THEME)
+// ==========================================================================
+
 async function loadCommitments() {
   const res = await authFetch('/api/commitments');
   if (!res) return;
@@ -477,34 +808,28 @@ async function loadCommitments() {
   const emptyEl = document.getElementById('commitments-empty');
   const tableEl = document.getElementById('commitments-table');
   const tbody = tableEl.querySelector('tbody');
-  const badgeTotal = document.getElementById('commitments-badge-total');
   const metricTotal = document.getElementById('metric-commitments-total');
-  const metricCount = document.getElementById('metric-commitments-count');
 
   // Also full recurring tab
   const recEmpty = document.getElementById('recurring-empty');
   const recTable = document.getElementById('recurring-full-table');
-  const recTbody = recTable.querySelector('tbody');
+  const recTbody = recTable ? recTable.querySelector('tbody') : null;
 
   if (!json.has_data || json.commitments.length === 0) {
     emptyEl.style.display = 'flex';
     tableEl.style.display = 'none';
-    recEmpty.style.display = 'flex';
-    recTable.style.display = 'none';
-    badgeTotal.textContent = 'Total: ₹0/mo';
-    metricTotal.textContent = '₹0';
-    metricCount.textContent = '0 recurring obligations';
+    if (recEmpty) recEmpty.style.display = 'flex';
+    if (recTable) recTable.style.display = 'none';
+    if (metricTotal) metricTotal.textContent = '₹0';
     return;
   }
 
   emptyEl.style.display = 'none';
   tableEl.style.display = 'table';
-  recEmpty.style.display = 'none';
-  recTable.style.display = 'table';
+  if (recEmpty) recEmpty.style.display = 'none';
+  if (recTable) recTable.style.display = 'table';
 
-  badgeTotal.textContent = `Total: ${formatINR(json.monthly_total)}/mo`;
-  metricTotal.textContent = formatINR(json.monthly_total);
-  metricCount.textContent = `${json.commitments.length} detected commitments`;
+  if (metricTotal) metricTotal.textContent = formatINR(json.monthly_total);
 
   const rowsHtml = json.commitments.map(c => `
     <tr>
@@ -517,13 +842,13 @@ async function loadCommitments() {
   `).join('');
 
   tbody.innerHTML = rowsHtml;
-  recTbody.innerHTML = rowsHtml;
+  if (recTbody) recTbody.innerHTML = rowsHtml;
 }
 
-// Month-over-Month Category Comparison with Chart.js
 function setupDashboardControls() {
   const toggle = document.getElementById('mom-chart-type-toggle');
-  const btns = toggle.querySelectorAll('.segment-btn');
+  if (!toggle) return;
+  const btns = toggle.querySelectorAll('.btn-pill');
   btns.forEach(b => {
     b.addEventListener('click', () => {
       btns.forEach(x => x.classList.remove('active'));
@@ -570,14 +895,14 @@ async function loadMoMComparison() {
   // Destroy previous Chart instance
   if (momChartInstance) momChartInstance.destroy();
 
-  // Color current month bars: red if over limit, cyan if within limit
-  const currentMonthColors = json.categories.map((cat, idx) => {
+  // Color current month bars: red if over limit, primary blue if within limit
+  const currentMonthColors = json.categories.map(cat => {
     const isOver = json.overspent.some(o => o.category === cat);
-    return isOver ? 'rgba(239, 68, 68, 0.85)' : 'rgba(56, 189, 248, 0.85)';
+    return isOver ? '#DC2626' : '#2563EB';
   });
 
   const ctx = canvas.getContext('2d');
-  
+
   if (momChartType === 'bar') {
     momChartInstance = new Chart(ctx, {
       type: 'bar',
@@ -587,8 +912,8 @@ async function loadMoMComparison() {
           {
             label: json.previous_month_label,
             data: json.previous_month_spending,
-            backgroundColor: 'rgba(100, 116, 139, 0.65)',
-            borderColor: '#64748b',
+            backgroundColor: '#94A3B8',
+            borderColor: '#64748B',
             borderWidth: 1,
             borderRadius: 4
           },
@@ -596,7 +921,7 @@ async function loadMoMComparison() {
             label: json.current_month_label,
             data: json.current_month_spending,
             backgroundColor: currentMonthColors,
-            borderColor: currentMonthColors.map(c => c.replace('0.85', '1')),
+            borderColor: currentMonthColors,
             borderWidth: 1,
             borderRadius: 4
           },
@@ -604,8 +929,8 @@ async function loadMoMComparison() {
             label: 'Personalized Budget Limit',
             data: json.limits,
             type: 'line',
-            borderColor: '#f59e0b',
-            backgroundColor: '#f59e0b',
+            borderColor: '#D97706',
+            backgroundColor: '#D97706',
             borderWidth: 2,
             pointRadius: 4,
             pointHoverRadius: 6,
@@ -619,7 +944,7 @@ async function loadMoMComparison() {
         maintainAspectRatio: false,
         plugins: {
           legend: {
-            labels: { color: '#9ca3af', font: { family: 'Inter', size: 11 } }
+            labels: { color: '#374151', font: { family: 'Inter', size: 12 } }
           },
           tooltip: {
             callbacks: {
@@ -631,14 +956,14 @@ async function loadMoMComparison() {
         },
         scales: {
           x: {
-            grid: { color: '#1f2937' },
-            ticks: { color: '#9ca3af', font: { family: 'Inter', size: 10 } }
+            grid: { color: '#E5E7EB' },
+            ticks: { color: '#6B7280', font: { family: 'Inter', size: 11 } }
           },
           y: {
-            grid: { color: '#1f2937' },
+            grid: { color: '#E5E7EB' },
             ticks: {
-              color: '#9ca3af',
-              font: { family: 'Inter', size: 10 },
+              color: '#6B7280',
+              font: { family: 'Inter', size: 11 },
               callback: function(value) { return formatINR(value); }
             }
           }
@@ -655,23 +980,23 @@ async function loadMoMComparison() {
           {
             label: json.previous_month_label,
             data: json.previous_month_spending,
-            borderColor: '#64748b',
-            backgroundColor: 'rgba(100, 116, 139, 0.1)',
+            borderColor: '#94A3B8',
+            backgroundColor: 'rgba(148, 163, 184, 0.1)',
             tension: 0.3,
             fill: false
           },
           {
             label: json.current_month_label,
             data: json.current_month_spending,
-            borderColor: '#38bdf8',
-            backgroundColor: 'rgba(56, 189, 248, 0.1)',
+            borderColor: '#2563EB',
+            backgroundColor: 'rgba(37, 99, 235, 0.1)',
             tension: 0.3,
             fill: false
           },
           {
             label: 'Personalized Budget Limit',
             data: json.limits,
-            borderColor: '#f59e0b',
+            borderColor: '#D97706',
             borderDash: [5, 5],
             tension: 0,
             fill: false
@@ -682,7 +1007,7 @@ async function loadMoMComparison() {
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
-          legend: { labels: { color: '#9ca3af' } },
+          legend: { labels: { color: '#374151' } },
           tooltip: {
             callbacks: {
               label: function(context) {
@@ -692,11 +1017,11 @@ async function loadMoMComparison() {
           }
         },
         scales: {
-          x: { grid: { color: '#1f2937' }, ticks: { color: '#9ca3af' } },
+          x: { grid: { color: '#E5E7EB' }, ticks: { color: '#6B7280' } },
           y: {
-            grid: { color: '#1f2937' },
+            grid: { color: '#E5E7EB' },
             ticks: {
-              color: '#9ca3af',
+              color: '#6B7280',
               callback: function(v) { return formatINR(v); }
             }
           }
@@ -706,263 +1031,40 @@ async function loadMoMComparison() {
   }
 }
 
-// 30-Day Forecast Trajectory Chart
-async function loadForecastChart() {
-  const res = await authFetch('/api/forecast');
-  if (!res) return;
-  const json = await res.json();
+// ==========================================================================
+// TRANSACTIONS & ANOMALIES TAB
+// ==========================================================================
 
-  const emptyEl = document.getElementById('forecast-empty');
-  const canvas = document.getElementById('forecast-chart-canvas');
-  const minBalEl = document.getElementById('metric-min-balance');
-  const shortageEl = document.getElementById('metric-shortage-prob');
-
-  if (json.status === 'empty' || !json.data) {
-    emptyEl.style.display = 'flex';
-    canvas.style.display = 'none';
-    minBalEl.textContent = '₹0';
-    shortageEl.textContent = '0.0%';
-    if (forecastChartInstance) { forecastChartInstance.destroy(); forecastChartInstance = null; }
-    return;
-  }
-
-  emptyEl.style.display = 'none';
-  canvas.style.display = 'block';
-
-  const d = json.data;
-  minBalEl.textContent = formatINR(d.min_balance);
-  shortageEl.textContent = (d.shortage_prob * 100).toFixed(1) + '%';
-  shortageEl.className = 'metric-value ' + (d.shortage_prob > 0.2 ? 'text-red' : (d.shortage_prob > 0.05 ? 'text-amber' : 'text-emerald'));
-
-  if (forecastChartInstance) forecastChartInstance.destroy();
-
-  const ctx = canvas.getContext('2d');
-  forecastChartInstance = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels: d.dates.map(dt => dt.substring(5)),
-      datasets: [
-        {
-          label: 'P90 (Optimistic)',
-          data: d.p90,
-          borderColor: 'rgba(56, 189, 248, 0.3)',
-          borderWidth: 1,
-          pointRadius: 0,
-          fill: '+1',
-          backgroundColor: 'rgba(56, 189, 248, 0.08)'
-        },
-        {
-          label: 'P50 (Median Trajectory)',
-          data: d.p50,
-          borderColor: '#38bdf8',
-          borderWidth: 2.5,
-          pointRadius: 0,
-          fill: false
-        },
-        {
-          label: 'P10 (Conservative Floor)',
-          data: d.p10,
-          borderColor: 'rgba(239, 68, 68, 0.4)',
-          borderWidth: 1,
-          pointRadius: 0,
-          fill: '-1',
-          backgroundColor: 'rgba(56, 189, 248, 0.08)'
-        }
-      ]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { labels: { color: '#9ca3af', font: { family: 'Inter', size: 10 } } },
-        tooltip: {
-          callbacks: {
-            label: function(ctx) { return `${ctx.dataset.label}: ${formatINR(ctx.raw)}`; }
-          }
-        }
-      },
-      scales: {
-        x: { grid: { color: '#1f2937' }, ticks: { color: '#9ca3af', maxTicksLimit: 10 } },
-        y: {
-          grid: { color: '#1f2937' },
-          ticks: { color: '#9ca3af', callback: function(v) { return formatINR(v); } }
-        }
-      }
-    }
-  });
-}
-
-// Business Income-Dip Priority Engine
-async function checkBusinessDip() {
-  const banner = document.getElementById('business-dip-banner');
-  if (currentPersona !== 'business') {
-    banner.style.display = 'none';
-    return;
-  }
-
-  const res = await authFetch('/api/dip-check');
-  if (!res) return;
-  const json = await res.json();
-
-  if (json.triggered) {
-    banner.style.display = 'flex';
-    document.getElementById('dip-banner-title').textContent = `⚠️ Income Dip Detected: Projected Revenue ₹${Math.round(json.projected_inflow).toLocaleString()} falls short by ₹${Math.round(json.shortfall).toLocaleString()}`;
-    document.getElementById('dip-banner-desc').textContent = `Baseline stable income is ${formatINR(json.baseline)}. P1 Essentials: ${formatINR(json.p1_total)} (${json.essentials_covered ? 'Covered' : 'Underfunded'}). Suggested P3 cuts to save ${formatINR(json.total_p3_savings)}.`;
-
-    // Auto-post chatbot message in goals chat without user asking
-    if (!dipAutoMessageSent && json.auto_chat_message) {
-      appendChatMessage('goals', 'bot', json.auto_chat_message);
-      appendChatMessage('copilot', 'bot', json.auto_chat_message);
-      dipAutoMessageSent = true;
-    }
-
-    document.getElementById('btn-view-dip-details').onclick = () => {
-      switchTab('tab-goals');
-    };
-  } else {
-    banner.style.display = 'none';
-  }
-}
-
-// Goals Tab & Advisor Chat
-function setupGoalsTab() {
-  const form = document.getElementById('goal-planner-form');
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const name = document.getElementById('goal-item-name').value.trim();
-    const cost = parseFloat(document.getElementById('goal-target-cost').value);
-    const months = parseInt(document.getElementById('goal-timeline-months').value);
-    const current_savings = parseFloat(document.getElementById('goal-current-savings').value) || 0.0;
-    const custom_return_val = document.getElementById('goal-custom-return').value;
-    const annual_return = custom_return_val ? parseFloat(custom_return_val) : null;
-
-    const res = await authFetch('/api/goals/plan', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, cost, months, current_savings, annual_return })
-    });
-
-    if (res && res.ok) {
-      const data = await res.json();
-      displayGoalRoadmap(data.plan);
-    }
-  });
-
-  // Chat in goals tab
-  const chatForm = document.getElementById('goals-chat-form');
-  const chatInput = document.getElementById('goals-chat-input');
-  const chips = document.querySelectorAll('#goals-chat-chips .chip-btn');
-
-  chips.forEach(chip => {
-    chip.addEventListener('click', () => {
-      const q = chip.getAttribute('data-query');
-      chatInput.value = q;
-      sendAdvisorChatMessage(q);
-    });
-  });
-
-  chatForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const msg = chatInput.value.trim();
-    if (!msg) return;
-    sendAdvisorChatMessage(msg);
-    chatInput.value = '';
-  });
-}
-
-function displayGoalRoadmap(plan) {
-  const output = document.getElementById('goal-roadmap-output');
-  output.style.display = 'block';
-
-  document.getElementById('goal-feasibility-title').textContent = `Feasibility: ${plan.feasibility.toUpperCase()}`;
-  document.getElementById('goal-feasibility-desc').textContent = plan.feasibility_description;
-  const box = document.getElementById('goal-feasibility-box');
-  if (plan.feasibility === 'feasible') box.style.borderLeftColor = '#10b981';
-  else if (plan.feasibility === 'stretch') box.style.borderLeftColor = '#f59e0b';
-  else box.style.borderLeftColor = '#ef4444';
-
-  document.getElementById('goal-stat-monthly').textContent = `${formatINR(plan.required_monthly_saving)}/mo`;
-  document.getElementById('goal-stat-vehicle').textContent = plan.recommended_instrument;
-  document.getElementById('goal-stat-sip').textContent = `${formatINR(plan.sip_amount)}/mo (${plan.assumed_annual_rate}% p.a.)`;
-
-  // Budget cuts
-  const cutsList = document.getElementById('goal-budget-cuts-list');
-  if (plan.budgeting_steps && plan.budgeting_steps.length > 0) {
-    cutsList.innerHTML = plan.budgeting_steps.map(s => `
-      <div class="cut-item">
-        <strong>${escapeHtml(s.action)}</strong>
-      </div>
-    `).join('');
-  } else {
-    cutsList.innerHTML = '<div class="text-sm text-muted">No category trimming required; surplus fully covers the monthly deposit.</div>';
-  }
-
-  // Milestones
-  const mTable = document.querySelector('#goal-milestones-table tbody');
-  mTable.innerHTML = (plan.milestones || []).map(m => `
-    <tr>
-      <td>Month ${m.month}</td>
-      <td>${formatINR(m.monthly_deposit)}</td>
-      <td class="text-emerald">+${formatINR(m.projected_returns)}</td>
-      <td><strong>${formatINR(m.target_balance)}</strong></td>
-    </tr>
-  `).join('');
-}
-
-async function sendAdvisorChatMessage(text) {
-  appendChatMessage('goals', 'user', text);
-  goalsChatHistory.push({ role: 'user', content: text });
-
-  const indicator = document.getElementById('goals-typing-indicator');
-  indicator.style.display = 'flex';
-
-  try {
-    const res = await authFetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message: text, history: goalsChatHistory })
-    });
-    indicator.style.display = 'none';
-    if (!res) return;
-    const data = await res.json();
-    goalsChatHistory.push({ role: 'assistant', content: data.reply });
-    appendChatMessage('goals', 'bot', data.reply);
-
-    // If goal plan returned, also update roadmap form UI
-    if (data.goal_plan) {
-      displayGoalRoadmap(data.goal_plan);
-    }
-  } catch (err) {
-    indicator.style.display = 'none';
-    appendChatMessage('goals', 'bot', 'Unable to connect to advisor.');
-  }
-}
-
-// Transactions View
 function setupTransactionsTab() {
-  const control = document.getElementById('narration-view-control');
-  const btns = control.querySelectorAll('.segment-btn');
+  const toggle = document.getElementById('narration-view-toggle');
+  if (!toggle) return;
+  const btns = toggle.querySelectorAll('.btn-pill');
   btns.forEach(b => {
     b.addEventListener('click', () => {
       btns.forEach(x => x.classList.remove('active'));
       b.classList.add('active');
       narrationViewMode = b.getAttribute('data-view');
-      loadTransactions();
+      renderTransactionsTable();
     });
   });
 }
+
+let cachedTransactionsList = [];
 
 async function loadTransactions() {
   const res = await authFetch('/api/transactions');
   if (!res) return;
   const json = await res.json();
+  cachedTransactionsList = json.transactions || [];
+  renderTransactionsTable();
+}
 
+function renderTransactionsTable() {
   const emptyEl = document.getElementById('transactions-empty');
   const tableEl = document.getElementById('transactions-table');
-  const tbody = document.getElementById('transactions-tbody');
-  const thDesc = document.getElementById('th-merchant-desc');
+  const tbody = tableEl.querySelector('tbody');
 
-  if (!json.has_data || json.transactions.length === 0) {
+  if (cachedTransactionsList.length === 0) {
     emptyEl.style.display = 'flex';
     tableEl.style.display = 'none';
     return;
@@ -971,87 +1073,35 @@ async function loadTransactions() {
   emptyEl.style.display = 'none';
   tableEl.style.display = 'table';
 
-  thDesc.textContent = narrationViewMode === 'cleaned' ? 'Cleaned Merchant → Category' : 'Raw Narration';
+  tbody.innerHTML = cachedTransactionsList.map(t => {
+    const isCredit = (t.type === 'credit');
+    const merchantDisplay = (narrationViewMode === 'cleaned')
+      ? (t.cleaned_merchant || t.description)
+      : t.description;
 
-  tbody.innerHTML = json.transactions.map(tx => {
-    const isCredit = tx.type === 'credit';
-    const amtClass = isCredit ? 'text-emerald' : 'text-main';
-    const typeBadge = isCredit ? '<span class="badge badge-success">Credit</span>' : '<span class="badge" style="background:#334155;">Debit</span>';
-
-    const descCell = narrationViewMode === 'cleaned' ? `
-      <div>
-        <div style="font-weight:600; color:#f8fafc;">${escapeHtml(tx.cleaned_merchant)}</div>
-        <div style="font-size:0.75rem; color:#94a3b8;">${escapeHtml(tx.category)}</div>
-      </div>
-    ` : `<span style="font-family:monospace; font-size:0.78rem;">${escapeHtml(tx.raw_description)}</span>`;
+    const amtStr = (isCredit ? '+' : '-') + formatINR(t.amount);
+    const amtClass = isCredit ? 'text-emerald font-bold' : 'text-red font-bold';
+    const catCol = CATEGORY_COLORS[t.category] || CATEGORY_COLORS['Other'];
 
     return `
       <tr>
-        <td style="white-space:nowrap;">${escapeHtml(tx.date)}</td>
-        <td>${descCell}</td>
-        <td>${typeBadge}</td>
-        <td class="text-right ${amtClass}" style="font-weight:600;">${isCredit ? '+' : '-'}${formatINR(tx.amount)}</td>
+        <td>${escapeHtml(t.date)}</td>
+        <td><strong>${escapeHtml(merchantDisplay)}</strong></td>
+        <td><span class="badge" style="background:${catCol.bg};color:${catCol.text};">${escapeHtml(t.category)}</span></td>
+        <td class="${amtClass}">${amtStr}</td>
       </tr>
     `;
   }).join('');
 }
 
-// Budget & Limits Tab
-function setupBudgetTab() {
-  document.getElementById('btn-save-limits').addEventListener('click', async () => {
-    const inputs = document.querySelectorAll('#limits-editor-grid input');
-    const newLimits = {};
-    inputs.forEach(inp => {
-      const cat = inp.getAttribute('data-cat');
-      const val = parseFloat(inp.value) || 0;
-      newLimits[cat] = val;
-    });
-
-    const res = await authFetch('/api/limits', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ limits: newLimits })
-    });
-
-    if (res && res.ok) {
-      alert('Budget limits saved successfully!');
-      await loadMoMComparison();
-    }
-  });
-}
-
-async function loadBudgetLimits() {
-  const res = await authFetch('/api/limits');
-  if (!res) return;
-  const json = await res.json();
-  const limits = json.limits || {};
-
-  const grid = document.getElementById('limits-editor-grid');
-  grid.innerHTML = Object.entries(limits).map(([cat, val]) => `
-    <div class="limit-item">
-      <label>${escapeHtml(cat)}</label>
-      <input type="number" class="form-control" data-cat="${escapeHtml(cat)}" value="${val}" min="0">
-    </div>
-  `).join('');
-}
-
-// Accuracy & Anomalies
-async function loadAccuracyAndAnomalies() {
-  const btRes = await authFetch('/api/backtest');
-  if (btRes && btRes.ok) {
-    const json = await btRes.json();
-    const bt = json.backtest;
-    document.getElementById('acc-accuracy-rate').textContent = bt.accuracy_rate + '%';
-    document.getElementById('acc-mape').textContent = bt.mape + '%';
-    document.getElementById('acc-interval').textContent = bt.in_confidence_interval_pct + '%';
-  }
-
+async function loadAnomaliesTable() {
   const anomRes = await authFetch('/api/anomaly');
   if (anomRes && anomRes.ok) {
     const json = await anomRes.json();
     const anomalies = json.anomalies || [];
     const emptyEl = document.getElementById('anomalies-empty');
     const tableEl = document.getElementById('anomalies-table');
+    if (!emptyEl || !tableEl) return;
     const tbody = tableEl.querySelector('tbody');
 
     if (anomalies.length === 0) {
@@ -1075,7 +1125,56 @@ async function loadAccuracyAndAnomalies() {
   }
 }
 
-// Simulator Tab
+// ==========================================================================
+// BUDGET & LIMITS TAB
+// ==========================================================================
+
+function setupBudgetTab() {
+  const form = document.getElementById('budget-limits-form');
+  if (!form) return;
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const inputs = document.querySelectorAll('#limits-editor-grid input');
+    const limits = {};
+    inputs.forEach(inp => {
+      const cat = inp.getAttribute('data-cat');
+      const val = parseFloat(inp.value) || 0;
+      limits[cat] = val;
+    });
+
+    const res = await authFetch('/api/limits', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ limits })
+    });
+
+    if (res && res.ok) {
+      await refreshAllDashboardPanels();
+      alert('Budget limits updated successfully.');
+    }
+  });
+}
+
+async function loadBudgetLimits() {
+  const res = await authFetch('/api/limits');
+  if (!res) return;
+  const json = await res.json();
+  const limits = json.limits || {};
+
+  const grid = document.getElementById('limits-editor-grid');
+  if (!grid) return;
+  grid.innerHTML = Object.entries(limits).map(([cat, val]) => `
+    <div class="limit-item">
+      <label>${escapeHtml(cat)}</label>
+      <input type="number" class="form-control" data-cat="${escapeHtml(cat)}" value="${val}" min="0">
+    </div>
+  `).join('');
+}
+
+// ==========================================================================
+// DETERMINISTIC SIMULATOR TAB
+// ==========================================================================
+
 function setupSimulatorTab() {
   const simType = document.getElementById('sim-type');
   const rateGroup = document.getElementById('interest-rate-group');
@@ -1112,53 +1211,197 @@ function displaySimulatorResult(sim, sc) {
   const resultsArea = document.getElementById('sim-results-area');
   resultsArea.style.display = 'block';
 
-  document.getElementById('sim-verdict-title').textContent = 'Verdict: ' + sim.verdict;
+  const verdict = sim.verdict || 'Safe';
+  document.getElementById('sim-verdict-title').textContent = 'Verdict: ' + verdict;
   document.getElementById('sim-verdict-desc').textContent = `Simulated ${sc.type.replace('_', ' ')} of ${formatINR(sc.amount)} on ${sc.date}.`;
 
   const banner = document.getElementById('sim-verdict-banner');
-  if (sim.shortage_prob_after <= 0.05 && !sim.first_at_risk_bill) banner.style.borderLeftColor = '#10b981';
-  else if (sim.shortage_prob_after > 0.20 || sim.first_at_risk_bill) banner.style.borderLeftColor = '#ef4444';
-  else banner.style.borderLeftColor = '#f59e0b';
+  if (verdict === 'Safe') {
+    banner.style.borderLeftColor = '#16A34A';
+    banner.style.background = '#F0FDF4';
+  } else if (verdict === 'Risky') {
+    banner.style.borderLeftColor = '#D97706';
+    banner.style.background = '#FFFBEB';
+  } else {
+    banner.style.borderLeftColor = '#DC2626';
+    banner.style.background = '#FEF2F2';
+  }
 
   // Prepay Card
   const prepayCard = document.getElementById('prepay-summary-card');
-  if (sim.prepay_details) {
+  if (sc.type === 'prepay_loan' && sim.interest_saved !== undefined) {
     prepayCard.style.display = 'block';
-    const pp = sim.prepay_details;
-    document.getElementById('prepay-cash-dip').textContent = formatINR(pp.cash_dip);
-    document.getElementById('prepay-interest-saved').textContent = formatINR(pp.interest_saved);
-    document.getElementById('prepay-tenure-reduced').textContent = `${pp.tenure_reduced_months} months reduction`;
-    document.getElementById('prepay-assumed-rate').textContent = `${pp.assumed_rate}% p.a.`;
+    document.getElementById('prepay-cash-dip').textContent = formatINR(sc.amount);
+    document.getElementById('prepay-interest-saved').textContent = formatINR(sim.interest_saved);
+    document.getElementById('prepay-tenure-reduced').textContent = `${sim.tenure_reduced_months || 0} months reduction`;
+    document.getElementById('prepay-assumed-rate').textContent = `${sc.interest_rate || 9}% p.a.`;
   } else {
     prepayCard.style.display = 'none';
   }
 
-  // Min balances
-  document.getElementById('sim-min-before').textContent = formatINR(sim.min_balance_before);
-  document.getElementById('sim-min-after').textContent = formatINR(sim.min_balance_after);
-  document.getElementById('sim-prob-before').textContent = (sim.shortage_prob_before * 100).toFixed(1) + '%';
-  document.getElementById('sim-prob-after').textContent = (sim.shortage_prob_after * 100).toFixed(1) + '%';
+  // Min and month-end balances
+  document.getElementById('sim-min-before').textContent = formatINR(sim.lowest_balance_before);
+  document.getElementById('sim-min-after').textContent = formatINR(sim.lowest_balance_after);
+  document.getElementById('sim-end-before').textContent = formatINR(sim.month_end_balance_before);
+  document.getElementById('sim-end-after').textContent = formatINR(sim.month_end_balance_after);
 
-  // Obligations
+  // Bill-Level Obligations Status Table
   const tbody = document.querySelector('#sim-obligations-table tbody');
-  tbody.innerHTML = (sim.obligations || []).map(ob => {
-    let badgeClass = 'badge-success';
-    if (ob.status === 'At risk') badgeClass = 'badge-warning';
-    else if (ob.status === 'Will likely miss') badgeClass = 'badge-danger';
+  tbody.innerHTML = (sim.obligations_status || []).map(ob => {
+    function getStatusBadge(status) {
+      if (status === 'Covered') return '<span class="badge badge-success">Covered</span>';
+      if (status === 'Tight') return '<span class="badge badge-warning">Tight</span>';
+      return '<span class="badge badge-danger">Short</span>';
+    }
+
     return `
       <tr>
         <td><strong>${escapeHtml(ob.name)}</strong></td>
-        <td>${escapeHtml(ob.due_date)}</td>
+        <td>${escapeHtml(ob.date)}</td>
         <td>${formatINR(ob.amount)}</td>
-        <td>${(ob.prob_before * 100).toFixed(0)}%</td>
-        <td><strong>${(ob.prob_after * 100).toFixed(0)}%</strong></td>
-        <td><span class="badge ${badgeClass}">${escapeHtml(ob.status)}</span></td>
+        <td>${getStatusBadge(ob.status_before)}</td>
+        <td>${getStatusBadge(ob.status_after)}</td>
       </tr>
     `;
   }).join('');
 }
 
-// Floating Copilot Chat
+// ==========================================================================
+// BUSINESS INCOME-DIP ENGINE
+// ==========================================================================
+
+async function checkBusinessDip() {
+  if (currentPersona !== 'business') {
+    document.getElementById('business-dip-banner').style.display = 'none';
+    return;
+  }
+
+  const res = await authFetch('/api/dip');
+  if (!res) return;
+  const json = await res.json();
+
+  const banner = document.getElementById('business-dip-banner');
+  if (json.triggered) {
+    banner.style.display = 'flex';
+    document.getElementById('dip-banner-title').textContent = `Income Dip Detected: Shortfall of ${formatINR(json.shortfall)}`;
+    document.getElementById('dip-banner-desc').textContent =
+      `Month-to-date inflow is ${formatINR(json.actual_mtd_inflow)}, falling below baseline target. Recommended cuts: Discretionary ₹${Math.round(json.cuts?.P3_discretionary?.reduce((a,c)=>a+c.amount, 0) || 0)} / Needed ₹${Math.round(json.cuts?.P2_needed?.reduce((a,c)=>a+c.amount, 0) || 0)}.`;
+
+    // Trigger auto message in copilot chat once per switch
+    if (!dipAutoMessageSent) {
+      dipAutoMessageSent = true;
+      sendCopilotMessage('Income dip detected. What cuts do you recommend?');
+    }
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
+// ==========================================================================
+// GOALS & INVESTMENTS TAB
+// ==========================================================================
+
+function setupGoalsTab() {
+  const form = document.getElementById('goal-planner-form');
+  const chatForm = document.getElementById('goals-chat-form');
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const item = document.getElementById('goal-item-name').value.trim();
+    const target_amount = parseFloat(document.getElementById('goal-target-amount').value);
+    const horizon_months = parseInt(document.getElementById('goal-horizon-months').value);
+    const priority = document.getElementById('goal-priority').value;
+
+    const res = await authFetch('/api/goals/plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ item, target_amount, horizon_months, priority })
+    });
+
+    if (res && res.ok) {
+      const json = await res.json();
+      displayGoalPlan(json.plan);
+    }
+  });
+
+  chatForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const input = document.getElementById('goals-chat-input');
+    const msg = input.value.trim();
+    if (!msg) return;
+    input.value = '';
+    sendGoalsChatMessage(msg);
+  });
+}
+
+function displayGoalPlan(plan) {
+  const area = document.getElementById('goal-result-area');
+  area.style.display = 'block';
+
+  document.getElementById('plan-monthly-sip').textContent = formatINR(plan.monthly_sip);
+  document.getElementById('plan-target-amt').textContent = formatINR(plan.target_amount);
+  document.getElementById('plan-vehicle-name').textContent = plan.recommended_vehicle.name;
+  document.getElementById('plan-vehicle-rate').textContent = `${plan.recommended_vehicle.expected_return_pct}% p.a. expected`;
+
+  const banner = document.getElementById('plan-feasibility-banner');
+  const feas = plan.feasibility;
+  if (feas.is_feasible) {
+    banner.className = 'goal-feasibility-banner feasible';
+    banner.textContent = `Feasible! Your monthly surplus of ${formatINR(feas.monthly_surplus)} covers the required ${formatINR(plan.monthly_sip)}/mo.`;
+  } else {
+    banner.className = 'goal-feasibility-banner not-feasible';
+    banner.textContent = `Shortfall of ${formatINR(feas.shortfall)}/mo. Review suggested budget cuts below.`;
+  }
+
+  // Budget cuts table
+  const tbody = document.querySelector('#goal-cuts-table tbody');
+  if (plan.budget_cuts && plan.budget_cuts.length > 0) {
+    tbody.innerHTML = plan.budget_cuts.map(c => `
+      <tr>
+        <td><strong>${escapeHtml(c.category)}</strong></td>
+        <td>${formatINR(c.current_spend)}</td>
+        <td class="text-emerald font-bold">-${formatINR(c.recommended_cut)}</td>
+        <td>${formatINR(c.target_spend)}</td>
+      </tr>
+    `).join('');
+  } else {
+    tbody.innerHTML = `<tr><td colspan="4" class="text-center text-muted">No budget cuts needed! Current cashflow surplus is sufficient.</td></tr>`;
+  }
+
+  // Monthly Milestone schedule
+  const schedBody = document.querySelector('#goal-schedule-table tbody');
+  schedBody.innerHTML = plan.monthly_schedule.map(s => `
+    <tr>
+      <td>Month ${s.month}</td>
+      <td>${formatINR(s.invested_cumulative)}</td>
+      <td class="text-emerald font-bold">${formatINR(s.projected_value)}</td>
+    </tr>
+  `).join('');
+}
+
+async function sendGoalsChatMessage(text) {
+  appendChatMessage('goals', 'user', text);
+  goalsChatHistory.push({ role: 'user', content: text });
+
+  try {
+    const res = await authFetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text, history: goalsChatHistory })
+    });
+    if (!res) return;
+    const data = await res.json();
+    goalsChatHistory.push({ role: 'assistant', content: data.reply });
+    appendChatMessage('goals', 'bot', data.reply);
+  } catch (err) {
+    appendChatMessage('goals', 'bot', 'Unable to reach assistant.');
+  }
+}
+
+// ==========================================================================
+// FLOATING COPILOT CHAT
+// ==========================================================================
+
 function setupCopilotChat() {
   const triggerBtn = document.getElementById('chat-trigger-btn');
   const chatWindow = document.getElementById('chat-window');
@@ -1208,7 +1451,7 @@ async function sendCopilotMessage(text) {
   copilotChatHistory.push({ role: 'user', content: text });
 
   const indicator = document.getElementById('typing-indicator');
-  indicator.style.display = 'flex';
+  if (indicator) indicator.style.display = 'flex';
 
   try {
     const res = await authFetch('/api/chat', {
@@ -1216,13 +1459,13 @@ async function sendCopilotMessage(text) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: text, history: copilotChatHistory })
     });
-    indicator.style.display = 'none';
+    if (indicator) indicator.style.display = 'none';
     if (!res) return;
     const data = await res.json();
     copilotChatHistory.push({ role: 'assistant', content: data.reply });
     appendChatMessage('copilot', 'bot', data.reply);
   } catch (err) {
-    indicator.style.display = 'none';
+    if (indicator) indicator.style.display = 'none';
     appendChatMessage('copilot', 'bot', 'Unable to reach Copilot.');
   }
 }
@@ -1241,49 +1484,3 @@ function appendChatMessage(target, sender, text) {
   container.appendChild(div);
   container.scrollTop = container.scrollHeight;
 }
-
-// Google Gemini Strategic Insights
-async function loadAIInsights() {
-  const emptyEl = document.getElementById('ai-insights-empty');
-  const contentEl = document.getElementById('ai-insights-content');
-  if (!emptyEl || !contentEl) return;
-
-  try {
-    const res = await authFetch('/api/ai/insights');
-    if (!res) return;
-    const data = await res.json();
-    if (!data.insights || data.insights.length === 0) {
-      emptyEl.style.display = 'block';
-      contentEl.style.display = 'none';
-      return;
-    }
-
-    emptyEl.style.display = 'none';
-    contentEl.style.display = 'grid';
-    contentEl.innerHTML = data.insights.map(item => `
-      <div class="ai-insight-card">
-        <div class="ai-insight-header">
-          <span class="ai-insight-title">${escapeHtml(item.title)}</span>
-          <span class="ai-insight-tag ${(item.tag || 'safe').toLowerCase()}">${escapeHtml(item.tag || 'Tip')}</span>
-        </div>
-        <p class="ai-insight-desc">${escapeHtml(item.description)}</p>
-      </div>
-    `).join('');
-  } catch (err) {
-    console.error('Failed to load AI insights:', err);
-  }
-}
-
-// Setup AI insights refresh button listener
-document.addEventListener('DOMContentLoaded', () => {
-  const btnRefreshAI = document.getElementById('btn-refresh-ai-insights');
-  if (btnRefreshAI) {
-    btnRefreshAI.addEventListener('click', async () => {
-      btnRefreshAI.disabled = true;
-      btnRefreshAI.textContent = '⏳ Analyzing...';
-      await loadAIInsights();
-      btnRefreshAI.disabled = false;
-      btnRefreshAI.textContent = '🔄 Analyze with Gemini';
-    });
-  }
-});

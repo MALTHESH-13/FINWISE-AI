@@ -1,8 +1,8 @@
 import os
 import csv
 import math
-import random
-from datetime import datetime, timedelta
+import calendar
+from datetime import datetime, date, timedelta
 from typing import List, Dict, Any, Optional
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -43,134 +43,9 @@ def load_user_transactions(user_id: int, persona: Optional[str] = None) -> List[
                 continue
     return sorted(records, key=lambda x: x["date"])
 
-def detect_recurring_and_cashflow(records: List[Dict[str, Any]], anchor_date: datetime):
-    """
-    Detects recurring obligations, recurring income, and daily discretionary spend.
-    """
-    if not records:
-        return {
-            "current_balance": 45000.0,
-            "recurring_income": [],
-            "recurring_obligations": [],
-            "daily_discretionary_mean": 300.0,
-            "daily_discretionary_std": 150.0
-        }
-
-    # Calculate net ledger balance with a healthy base
-    credits = sum(r["amount"] for r in records if r["type"] == "credit")
-    debits = sum(r["amount"] for r in records if r["type"] == "debit")
-    # Base starting balance to ensure realistic working balance
-    current_balance = max(25000.0, 50000.0 + (credits - debits) * 0.5)
-
-    # Detect recurring items by grouping descriptions
-    debit_groups: Dict[str, List[Dict[str, Any]]] = {}
-    credit_groups: Dict[str, List[Dict[str, Any]]] = {}
-
-    for r in records:
-        desc_lower = r["description"].lower()
-        if r["type"] == "debit":
-            # Group by key category or normalized desc
-            key = None
-            if "rent" in desc_lower or "hostel" in desc_lower:
-                key = "Rent / Hostel"
-            elif "emi" in desc_lower or "loan" in desc_lower:
-                key = "Loan EMI"
-            elif "electricity" in desc_lower or "bescom" in desc_lower:
-                key = "Electricity / Utility"
-            elif "netflix" in desc_lower:
-                key = "Netflix"
-            elif "spotify" in desc_lower:
-                key = "Spotify"
-            elif "coworking" in desc_lower or "wework" in desc_lower:
-                key = "Office Space"
-            elif "adobe" in desc_lower or "figma" in desc_lower:
-                key = "Software Subscriptions"
-            
-            if key:
-                debit_groups.setdefault(key, []).append(r)
-        else:
-            if "salary" in desc_lower or "allowance" in desc_lower or "client" in desc_lower or "gig" in desc_lower:
-                credit_groups.setdefault(r["description"][:20], []).append(r)
-
-    # Build obligations for the next 30 days from anchor_date
-    obligations = []
-    for name, items in debit_groups.items():
-        avg_amt = sum(it["amount"] for it in items) / len(items)
-        # Find representative day of month
-        days = [int(it["date"].split("-")[2]) for it in items]
-        rep_day = max(1, min(28, int(sum(days) / len(days))))
-
-        # Calculate next due date relative to anchor_date
-        target_year = anchor_date.year
-        target_month = anchor_date.month
-        try:
-            due_dt = datetime(target_year, target_month, rep_day)
-            if due_dt < anchor_date:
-                if target_month == 12:
-                    due_dt = datetime(target_year + 1, 1, rep_day)
-                else:
-                    due_dt = datetime(target_year, target_month + 1, rep_day)
-        except ValueError:
-            due_dt = anchor_date + timedelta(days=10)
-
-        # Only include if within 30-day horizon
-        if 0 <= (due_dt - anchor_date).days <= 30:
-            obligations.append({
-                "name": name,
-                "due_date": due_dt.strftime("%Y-%m-%d"),
-                "amount": round(avg_amt, 2)
-            })
-
-    obligations = sorted(obligations, key=lambda x: x["due_date"])
-
-    # Build recurring income for the next 30 days
-    incomes = []
-    for name, items in credit_groups.items():
-        avg_amt = sum(it["amount"] for it in items) / len(items)
-        days = [int(it["date"].split("-")[2]) for it in items]
-        rep_day = max(1, min(28, int(sum(days) / len(days))))
-        target_year = anchor_date.year
-        target_month = anchor_date.month
-        try:
-            inc_dt = datetime(target_year, target_month, rep_day)
-            if inc_dt < anchor_date:
-                if target_month == 12:
-                    inc_dt = datetime(target_year + 1, 1, rep_day)
-                else:
-                    inc_dt = datetime(target_year, target_month + 1, rep_day)
-        except ValueError:
-            inc_dt = anchor_date + timedelta(days=15)
-
-        if 0 <= (inc_dt - anchor_date).days <= 30:
-            incomes.append({
-                "name": name,
-                "date": inc_dt.strftime("%Y-%m-%d"),
-                "amount": round(avg_amt, 2)
-            })
-
-    # Variable spend metrics
-    discretionary_debits = [
-        r["amount"] for r in records 
-        if r["type"] == "debit" and not any(k in r["description"].lower() for k in ["rent", "hostel", "emi", "loan", "bescom", "wework"])
-    ]
-    if discretionary_debits:
-        mean_spend = sum(discretionary_debits) / (len(records) / 3.0 + 10)
-        std_spend = mean_spend * 0.4
-    else:
-        mean_spend = 350.0
-        std_spend = 150.0
-
-    return {
-        "current_balance": round(current_balance, 2),
-        "recurring_income": incomes,
-        "recurring_obligations": obligations,
-        "daily_discretionary_mean": mean_spend,
-        "daily_discretionary_std": std_spend
-    }
-
 def calculate_prepay_loan_savings(amount: float, annual_rate: float = 9.0, current_emi: Optional[float] = None) -> Dict[str, Any]:
     """
-    ADD 4: Prepay loan what-if:
+    Prepay loan what-if:
     Reduces remaining principal, recomputes tenure at the same EMI,
     shows cash dip now vs total interest saved.
     Assumed interest rate default 9% p.a.
@@ -180,20 +55,15 @@ def calculate_prepay_loan_savings(amount: float, annual_rate: float = 9.0, curre
 
     r = (annual_rate / 100.0) / 12.0
 
-    # Default loan parameters if not already known
     if not current_emi or current_emi <= 0:
-        current_emi = 15000.0  # standard EMI
+        current_emi = 15000.0
 
-    # Estimate original remaining principal assuming standard 36 remaining months
     assumed_tenure = 36
     orig_principal = current_emi * ((1 + r)**assumed_tenure - 1) / (r * (1 + r)**assumed_tenure)
 
-    # Apply prepayment
     prepay_amount = min(amount, orig_principal * 0.95)
     new_principal = max(1000.0, orig_principal - prepay_amount)
 
-    # Recompute tenure at same EMI:
-    # (1+r)^N = EMI / (EMI - P * r)
     denom = current_emi - (new_principal * r)
     if denom > 0:
         val = current_emi / denom
@@ -216,270 +86,241 @@ def calculate_prepay_loan_savings(amount: float, annual_rate: float = 9.0, curre
         "tenure_reduced_months": tenure_reduced
     }
 
-def run_monte_carlo(current_balance: float, incomes: List[Dict], obligations: List[Dict],
-                     daily_mean: float, daily_std: float, anchor_date: datetime,
-                     extra_scenario: Optional[Dict[str, Any]] = None,
-                     iterations: int = 400):
-    """
-    Runs Monte Carlo simulation for 30 days.
-    """
-    horizon_days = 30
-    date_list = [(anchor_date + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(horizon_days + 1)]
-
-    # Pre-map daily deterministic flows
-    inflows_by_date = {}
-    for inc in incomes:
-        inflows_by_date[inc["date"]] = inflows_by_date.get(inc["date"], 0.0) + inc["amount"]
-
-    outflows_by_date = {}
-    for ob in obligations:
-        outflows_by_date[ob["due_date"]] = outflows_by_date.get(ob["due_date"], 0.0) + ob["amount"]
-
-    # Extra scenario modifications
-    scenario_one_time_debit = 0.0
-    scenario_debit_date = None
-    recurring_income_delta = 0.0
-    cancel_sub_name = None
-
-    if extra_scenario:
-        stype = extra_scenario.get("type")
-        samount = float(extra_scenario.get("amount", 0.0))
-        sdate = extra_scenario.get("date", date_list[1])
-
-        if stype in ["purchase", "prepay_loan"]:
-            scenario_one_time_debit = samount
-            scenario_debit_date = sdate
-        elif stype == "loan_emi":
-            # Adds monthly EMI
-            scenario_one_time_debit = samount
-            scenario_debit_date = sdate
-        elif stype == "income_change":
-            recurring_income_delta = samount
-        elif stype == "cancel_subscription":
-            cancel_sub_name = extra_scenario.get("name", "").lower()
-
-    # Track trajectories and obligation checks across runs
-    daily_balances_all = [[] for _ in range(horizon_days + 1)]
-    min_balances = []
-    shortage_count = 0
-
-    # Obligation hits tracker: {due_date: [success_bool, ...]}
-    obligation_checks: Dict[str, List[bool]] = {ob["due_date"]: [] for ob in obligations}
-
-    random.seed(42)  # For deterministic reproduction
-
-    for _ in range(iterations):
-        balance = current_balance
-        min_bal = balance
-        had_shortage = False
-
-        for day_idx in range(horizon_days + 1):
-            cur_date = date_list[day_idx]
-
-            # Inflow
-            day_in = inflows_by_date.get(cur_date, 0.0) + recurring_income_delta
-            # Outflow
-            day_out = outflows_by_date.get(cur_date, 0.0)
-
-            # Check if this date has a cancelled subscription
-            if cancel_sub_name:
-                for ob in obligations:
-                    if ob["due_date"] == cur_date and cancel_sub_name in ob["name"].lower():
-                        day_out = max(0.0, day_out - ob["amount"])
-
-            # Check scenario one-time debit
-            if scenario_debit_date == cur_date:
-                day_out += scenario_one_time_debit
-
-            # Discretionary spending
-            if day_idx > 0:
-                spend = max(0.0, random.gauss(daily_mean, daily_std))
-                balance -= spend
-
-            balance += (day_in - day_out)
-            daily_balances_all[day_idx].append(balance)
-
-            if balance < min_bal:
-                min_bal = balance
-            if balance < 0:
-                had_shortage = True
-
-            # Record if balance satisfied upcoming obligation
-            if cur_date in obligation_checks:
-                req_amt = outflows_by_date.get(cur_date, 0.0)
-                obligation_checks[cur_date].append(balance >= req_amt)
-
-        min_balances.append(min_bal)
-        if had_shortage:
-            shortage_count += 1
-
-    # Percentiles
-    p10_traj = []
-    p50_traj = []
-    p90_traj = []
-    for day_idx in range(horizon_days + 1):
-        vals = sorted(daily_balances_all[day_idx])
-        p10_traj.append(vals[int(iterations * 0.10)])
-        p50_traj.append(vals[int(iterations * 0.50)])
-        p90_traj.append(vals[int(iterations * 0.90)])
-
-    sorted_mins = sorted(min_balances)
-    med_min_bal = sorted_mins[int(iterations * 0.50)]
-    shortage_prob = round(shortage_count / float(iterations), 3)
-
-    # Obligation probabilities
-    ob_probs = {}
-    for dt, checks in obligation_checks.items():
-        if checks:
-            ob_probs[dt] = round(sum(1 for c in checks if c) / float(len(checks)), 3)
-        else:
-            ob_probs[dt] = 1.0
-
-    return {
-        "dates": date_list,
-        "p10": p10_traj,
-        "p50": p50_traj,
-        "p90": p90_traj,
-        "min_balance": round(med_min_bal, 2),
-        "shortage_prob": shortage_prob,
-        "obligation_probs": ob_probs
-    }
-
-def get_forecast(user_id: int, persona: Optional[str] = None) -> Dict[str, Any]:
-    records = load_user_transactions(user_id, persona)
-    anchor_date = datetime(2026, 11, 15)
-    model = detect_recurring_and_cashflow(records, anchor_date)
-
-    baseline = run_monte_carlo(
-        current_balance=model["current_balance"],
-        incomes=model["recurring_income"],
-        obligations=model["recurring_obligations"],
-        daily_mean=model["daily_discretionary_mean"],
-        daily_std=model["daily_discretionary_std"],
-        anchor_date=anchor_date
-    )
-
-    # Map obligations
-    ob_list = []
-    for ob in model["recurring_obligations"]:
-        prob = baseline["obligation_probs"].get(ob["due_date"], 1.0)
-        status = "Safe" if prob >= 0.95 else ("At risk" if prob >= 0.70 else "Will likely miss")
-        ob_list.append({
-            "name": ob["name"],
-            "due_date": ob["due_date"],
-            "amount": ob["amount"],
-            "prob_before": prob,
-            "prob_after": prob,
-            "status": status
-        })
-
-    return {
-        "current_balance": model["current_balance"],
-        "min_balance": baseline["min_balance"],
-        "shortage_prob": baseline["shortage_prob"],
-        "dates": baseline["dates"],
-        "p10": baseline["p10"],
-        "p50": baseline["p50"],
-        "p90": baseline["p90"],
-        "obligations": ob_list
-    }
-
 def simulate_scenario(user_id: int, scenario: Dict[str, Any], persona: Optional[str] = None) -> Dict[str, Any]:
     """
-    Runs before vs after simulation.
+    Deterministic simulator + bill-level check + what-if:
+    Builds a day-by-day running balance for the rest of the current month.
+    = current balance, minus reserved items on their due dates,
+      plus expected salary (Salaried only, if salary day is still ahead and not yet credited).
+    Applies what-if and returns before vs after:
+    lowest running balance, month-end balance, per-bill status (Covered / Tight / Short),
+    and verdict: Safe (lowest >= buffer), Risky (0 <= lowest < buffer), Not advisable (lowest < 0).
     """
+    from backend.persona import (
+        get_active_persona,
+        get_profile_data,
+        get_fixed_commitments
+    )
+
+    if not persona:
+        persona = get_active_persona(user_id)
+
     records = load_user_transactions(user_id, persona)
-    anchor_date = datetime(2026, 11, 15)
-    model = detect_recurring_and_cashflow(records, anchor_date)
 
-    # Baseline (Before)
-    baseline = run_monte_carlo(
-        current_balance=model["current_balance"],
-        incomes=model["recurring_income"],
-        obligations=model["recurring_obligations"],
-        daily_mean=model["daily_discretionary_mean"],
-        daily_std=model["daily_discretionary_std"],
-        anchor_date=anchor_date
-    )
+    # Current reference date: Nov 15, 2026 for sample statements or today's date
+    anchor_date = date(2026, 11, 15)
+    year = anchor_date.year
+    month = anchor_date.month
+    num_days = calendar.monthrange(year, month)[1]
+    curr_month_prefix = f"{year}-{month:02d}"
 
-    # After scenario
-    simulated = run_monte_carlo(
-        current_balance=model["current_balance"],
-        incomes=model["recurring_income"],
-        obligations=model["recurring_obligations"],
-        daily_mean=model["daily_discretionary_mean"],
-        daily_std=model["daily_discretionary_std"],
-        anchor_date=anchor_date,
-        extra_scenario=scenario
-    )
+    # Calculate current ledger balance
+    credits = sum(r["amount"] for r in records if r["type"] == "credit")
+    debits = sum(r["amount"] for r in records if r["type"] == "debit")
+    current_balance = credits - debits
 
-    # ADD 3: Bill-level check
-    obligations_result = []
-    first_at_risk_bill = None
+    # Profile settings
+    prof_info = get_profile_data(user_id, persona)
+    profile = prof_info.get("profile", {})
+    baseline_income = prof_info.get("baseline_income", 0.0)
 
-    for ob in model["recurring_obligations"]:
-        p_before = baseline["obligation_probs"].get(ob["due_date"], 1.0)
-        p_after = simulated["obligation_probs"].get(ob["due_date"], 1.0)
+    # Buffer: from scenario parameter, or profile safety buffer, or default 10,000
+    scenario_buffer = scenario.get("buffer")
+    if scenario_buffer is not None and float(scenario_buffer) >= 0:
+        buffer_val = float(scenario_buffer)
+    else:
+        buffer_val = float(profile.get("safety_buffer", 0.15) * baseline_income) if baseline_income > 0 else 10000.0
+        if buffer_val <= 0:
+            buffer_val = 10000.0
 
-        if p_after >= 0.95:
-            st = "Safe"
-        elif p_after >= 0.60:
-            st = "At risk"
-            if not first_at_risk_bill:
-                first_at_risk_bill = ob["name"]
-        else:
-            st = "Will likely miss"
-            if not first_at_risk_bill:
-                first_at_risk_bill = ob["name"]
+    # Expected salary check (Salaried only)
+    salary_to_add = 0.0
+    salary_credit_day = None
+    if persona == "salaried":
+        salary_amt = float(profile.get("salary", 0.0) or baseline_income)
+        sal_day = int(profile.get("salary_day", 1))
+        sal_day = max(1, min(num_days, sal_day))
 
-        obligations_result.append({
-            "name": ob["name"],
-            "due_date": ob["due_date"],
-            "amount": ob["amount"],
-            "prob_before": p_before,
-            "prob_after": p_after,
-            "status": st
+        # Check if salary was already credited this month on or before anchor date
+        salary_already_received = any(
+            r["type"] == "credit" and
+            r["date"].startswith(curr_month_prefix) and
+            ("salary" in r["description"].lower() or r["amount"] >= salary_amt * 0.8)
+            for r in records
+        )
+
+        if not salary_already_received and sal_day >= anchor_date.day:
+            salary_to_add = salary_amt
+            salary_credit_day = sal_day
+
+    # Recurring commitments & reserved items
+    commitments_data = get_fixed_commitments(user_id, persona)
+    commitments_list = commitments_data.get("commitments", [])
+
+    savings_amount = float(profile.get("monthly_savings_amount", 0.0) or 0.0)
+    savings_day = int(profile.get("monthly_savings_day", num_days) or num_days)
+    savings_day = max(1, min(num_days, savings_day))
+
+    reserved_items = []
+    for c in commitments_list:
+        rep_day = int(c.get("day_of_month", 5))
+        rep_day = max(1, min(num_days, rep_day))
+        due_str = f"{year}-{month:02d}-{rep_day:02d}"
+
+        # Only consider bills due from anchor_date onwards
+        if rep_day >= anchor_date.day:
+            # Check if already paid
+            is_paid = any(
+                r["type"] == "debit" and
+                r["date"].startswith(curr_month_prefix) and
+                abs(r["amount"] - c["amount"]) <= max(200.0, c["amount"] * 0.25)
+                for r in records
+            )
+            if not is_paid:
+                reserved_items.append({
+                    "name": c["name"],
+                    "category": c["category"],
+                    "amount": float(c["amount"]),
+                    "due_day": rep_day,
+                    "due_date": due_str
+                })
+
+    if savings_amount > 0 and savings_day >= anchor_date.day:
+        reserved_items.append({
+            "name": "Monthly Savings Transfer",
+            "category": "Savings",
+            "amount": savings_amount,
+            "due_day": savings_day,
+            "due_date": f"{year}-{month:02d}-{savings_day:02d}"
         })
 
-    # Prepay loan specific details
+    # What-if scenario parameters
+    stype = scenario.get("type", "purchase")
+    samount = float(scenario.get("amount", 0.0))
+    sdate_str = scenario.get("date", anchor_date.strftime("%Y-%m-%d"))
+    try:
+        scenario_dt = datetime.strptime(sdate_str, "%Y-%m-%d").date()
+        sday = scenario_dt.day if (scenario_dt.year == year and scenario_dt.month == month) else anchor_date.day
+    except Exception:
+        sday = anchor_date.day
+
+    cancel_sub_name = scenario.get("name", "").lower() if stype == "cancel_subscription" else None
+
+    # Day-by-day simulation from anchor_date.day to num_days
+    sim_days = list(range(anchor_date.day, num_days + 1))
+    date_labels = [f"{year}-{month:02d}-{d:02d}" for d in sim_days]
+
+    bal_before = current_balance
+    bal_after = current_balance
+
+    daily_before = []
+    daily_after = []
+
+    # Bill tracking on due date
+    bill_status_before = {}
+    bill_status_after = {}
+
+    for d in sim_days:
+        cur_date_str = f"{year}-{month:02d}-{d:02d}"
+
+        # Inflows (Salary if due today)
+        inflow_day = salary_to_add if (d == salary_credit_day) else 0.0
+        bal_before += inflow_day
+        bal_after += inflow_day
+
+        # Income change scenario
+        if stype == "income_change" and d == sday:
+            bal_after += samount
+
+        # Outflows from reserved bills due today
+        bills_due_today = [b for b in reserved_items if b["due_day"] == d]
+        for b in bills_due_today:
+            # Before status
+            rem_before = bal_before - b["amount"]
+            if rem_before >= buffer_val:
+                bill_status_before[b["due_date"]] = "Covered"
+            elif rem_before >= 0:
+                bill_status_before[b["due_date"]] = "Tight"
+            else:
+                bill_status_before[b["due_date"]] = "Short"
+            bal_before -= b["amount"]
+
+            # After status (account for cancel_subscription)
+            if cancel_sub_name and cancel_sub_name in b["name"].lower():
+                # cancelled subscription is NOT deducted in 'after'
+                rem_after = bal_after
+            else:
+                rem_after = bal_after - b["amount"]
+                bal_after -= b["amount"]
+
+            if rem_after >= buffer_val:
+                bill_status_after[b["due_date"]] = "Covered"
+            elif rem_after >= 0:
+                bill_status_after[b["due_date"]] = "Tight"
+            else:
+                bill_status_after[b["due_date"]] = "Short"
+
+        # Outflows from one-time what-if (purchase, loan_emi, prepay_loan)
+        if d == sday:
+            if stype in ["purchase", "loan_emi", "prepay_loan"]:
+                bal_after -= samount
+
+        daily_before.append(round(bal_before, 2))
+        daily_after.append(round(bal_after, 2))
+
+    lowest_before = min(daily_before) if daily_before else current_balance
+    lowest_after = min(daily_after) if daily_after else current_balance
+    month_end_before = daily_before[-1] if daily_before else current_balance
+    month_end_after = daily_after[-1] if daily_after else current_balance
+
+    # Per-bill status results
+    obligations_result = []
+    for b in reserved_items:
+        s_b = bill_status_before.get(b["due_date"], "Covered")
+        s_a = bill_status_after.get(b["due_date"], "Covered")
+        obligations_result.append({
+            "name": b["name"],
+            "due_date": b["due_date"],
+            "amount": b["amount"],
+            "status_before": s_b,
+            "status_after": s_a,
+            "status": s_a
+        })
+
+    # Verdict: Safe (lowest >= buffer), Risky (0 <= lowest < buffer), Not advisable (lowest < 0)
+    if lowest_after >= buffer_val:
+        verdict = "Safe"
+    elif 0 <= lowest_after < buffer_val:
+        verdict = "Risky"
+    else:
+        verdict = "Not advisable"
+
+    # Prepay loan calculations if applicable
     prepay_details = None
-    if scenario.get("type") == "prepay_loan":
+    if stype == "prepay_loan":
         rate = float(scenario.get("interest_rate", 9.0))
-        # Find EMI obligation if exists
         emi_amt = 15000.0
-        for ob in model["recurring_obligations"]:
+        for ob in commitments_list:
             if "emi" in ob["name"].lower() or "loan" in ob["name"].lower():
-                emi_amt = ob["amount"]
+                emi_amt = float(ob["amount"])
                 break
         prepay_details = calculate_prepay_loan_savings(
-            amount=float(scenario.get("amount", 0.0)),
+            amount=samount,
             annual_rate=rate,
             current_emi=emi_amt
         )
 
-    # Formulate verdict
-    min_diff = simulated["min_balance"] - baseline["min_balance"]
-    shortage_diff = simulated["shortage_prob"] - baseline["shortage_prob"]
-
-    if simulated["shortage_prob"] <= 0.05 and not first_at_risk_bill:
-        verdict = "Safe to proceed. Your cashflow remains resilient."
-    elif simulated["shortage_prob"] > 0.25 or any(o["status"] == "Will likely miss" for o in obligations_result):
-        verdict = "High risk of cash shortfall. You are likely to face trouble covering essential bills."
-    else:
-        verdict = "Caution recommended. Cash buffer will be significantly tight."
-
     return {
         "verdict": verdict,
-        "min_balance_before": baseline["min_balance"],
-        "min_balance_after": simulated["min_balance"],
-        "min_balance_diff": round(min_diff, 2),
-        "shortage_prob_before": baseline["shortage_prob"],
-        "shortage_prob_after": simulated["shortage_prob"],
-        "shortage_prob_diff": round(shortage_diff, 3),
+        "lowest_balance_before": round(lowest_before, 2),
+        "lowest_balance_after": round(lowest_after, 2),
+        "month_end_balance_before": round(month_end_before, 2),
+        "month_end_balance_after": round(month_end_after, 2),
         "obligations": obligations_result,
-        "first_at_risk_bill": first_at_risk_bill,
+        "obligations_status": obligations_result,
+        "buffer": round(buffer_val, 2),
         "prepay_details": prepay_details,
-        "dates": baseline["dates"],
-        "baseline_p50": baseline["p50"],
-        "simulated_p50": simulated["p50"]
+        "dates": date_labels,
+        "daily_balance_before": daily_before,
+        "daily_balance_after": daily_after
     }

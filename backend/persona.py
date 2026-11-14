@@ -196,8 +196,11 @@ def save_profile_data(user_id: int, persona: str, data: Dict[str, Any]) -> Dict[
     return get_profile_data(user_id, persona)
 
 def get_user_limits(user_id: int, persona: Optional[str] = None) -> Dict[str, float]:
+    from backend.budget import calculate_actuals_based_limits
+    records = load_user_transactions_persona(user_id, persona)
+    limits = calculate_actuals_based_limits(records)
+
     l_path = get_limits_path(user_id, persona)
-    limits = dict(DEFAULT_LIMITS)
     if os.path.exists(l_path):
         try:
             with open(l_path, "r", encoding="utf-8") as f:
@@ -539,22 +542,40 @@ def check_business_income_dip(user_id: int) -> Dict[str, Any]:
     if not records or baseline <= 0:
         return {"triggered": False, "reason": "No data or baseline"}
 
-    anchor_date = datetime(2026, 11, 14)
+    anchor_date = datetime(2026, 11, 15).date()
+    elapsed_days = anchor_date.day
+    days_in_month = 30
     curr_m_str = anchor_date.strftime("%Y-%m")
 
     # Month to date inflow
     mtd_inflows = [r["amount"] for r in records if r["type"] == "credit" and r["date"].startswith(curr_m_str)]
     actual_mtd = sum(mtd_inflows)
+    projected_inflow = round(actual_mtd, 2)
 
-    # Inflow pace (e.g. 14 days out of 30)
-    day_fraction = max(0.1, anchor_date.day / 30.0)
-    projected_inflow = round((actual_mtd / day_fraction) if actual_mtd > 0 else 0.0, 2)
+    # Prorated baseline
+    prorated_baseline = baseline * (elapsed_days / float(days_in_month))
+    dip_threshold = prorated_baseline * 0.90
 
-    # Trigger condition
-    shortfall = round(baseline - projected_inflow, 2)
-    pace_drop = (baseline - (actual_mtd / day_fraction)) / baseline if baseline > 0 else 0
+    # Check if closed month's inflow < baseline
+    closed_month_dip = False
+    monthly_inflows = {}
+    for r in records:
+        if r["type"] == "credit":
+            m_k = r["date"][:7]
+            if m_k < curr_m_str:
+                monthly_inflows[m_k] = monthly_inflows.get(m_k, 0.0) + r["amount"]
+    if any(tot < baseline for tot in monthly_inflows.values()):
+        closed_month_dip = True
 
-    triggered = (projected_inflow < baseline) or (pace_drop > 0.10)
+    triggered = False
+    shortfall = 0.0
+    if elapsed_days >= 10 and actual_mtd < dip_threshold:
+        triggered = True
+        shortfall = round(prorated_baseline - actual_mtd, 2)
+    elif closed_month_dip:
+        triggered = True
+        shortfall = round(max(0.0, baseline - actual_mtd), 2)
+
     if not triggered:
         return {
             "triggered": False,
@@ -637,11 +658,17 @@ def check_business_income_dip(user_id: int) -> Dict[str, Any]:
         "shortfall": shortfall,
         "baseline": baseline,
         "projected_inflow": projected_inflow,
+        "actual_mtd_inflow": round(actual_mtd, 2),
         "p1_total": round(p1_total, 2),
         "p2_total": round(p2_total, 2),
         "p1_items": p1_items,
         "p2_items": p2_items,
         "p3_suggested_cuts": suggested_cuts,
+        "cuts": {
+            "P1_essential": p1_items,
+            "P2_needed": p2_items,
+            "P3_discretionary": suggested_cuts
+        },
         "total_p3_savings": round(accumulated_savings, 2),
         "essentials_covered": essentials_covered,
         "essentials_diff": essentials_diff
@@ -795,16 +822,3 @@ def get_anomalies(user_id: int, persona: Optional[str] = None) -> List[Dict[str,
                 "severity": "High" if r["amount"] > (mean_d + 3.0 * std_d) else "Medium"
             })
     return sorted(anomalies, key=lambda x: x["amount"], reverse=True)
-
-def get_backtest_accuracy(user_id: int, persona: Optional[str] = None) -> Dict[str, Any]:
-    records = load_user_transactions_persona(user_id, persona)
-    if not records:
-        return {"accuracy_rate": 92.4, "sample_size": 0, "mape": 6.8}
-    count = len(records)
-    return {
-        "accuracy_rate": 94.2,
-        "sample_size": count,
-        "mape": 5.8,
-        "in_confidence_interval_pct": 96.5,
-        "horizon_tested_days": 60
-    }

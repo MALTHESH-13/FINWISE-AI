@@ -1,4 +1,5 @@
 import os
+import csv
 import shutil
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Depends, HTTPException, status, Request, Response, UploadFile, File
@@ -23,7 +24,6 @@ from backend.auth import (
 from backend.categorizer import clean_description, categorize_transaction
 from backend.simulator import (
     load_user_transactions,
-    get_forecast,
     simulate_scenario,
     get_user_csv_path
 )
@@ -41,8 +41,8 @@ from backend.persona import (
     check_business_income_dip,
     plan_investment_goal,
     get_anomalies,
-    get_backtest_accuracy,
-    load_user_transactions_persona
+    load_user_transactions_persona,
+    get_transactions_path
 )
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -80,6 +80,9 @@ class ProfileSaveModel(BaseModel):
     business_type: Optional[str] = ""
     safety_buffer: Optional[float] = 0.15
     revenue_history: Optional[List[Dict[str, Any]]] = None
+    # Savings transfer
+    monthly_savings_amount: Optional[float] = 0.0
+    monthly_savings_day: Optional[int] = None
 
 class LimitsModel(BaseModel):
     limits: Dict[str, float]
@@ -97,10 +100,17 @@ class SimulateModel(BaseModel):
     date: Optional[str] = None
     interest_rate: Optional[float] = 9.0
     name: Optional[str] = None
+    buffer: Optional[float] = None
 
 class ChatModel(BaseModel):
     message: str
     history: Optional[List[Dict[str, Any]]] = None
+
+class TransactionAddModel(BaseModel):
+    date: str
+    description: str
+    amount: float
+    type: str = "debit"
 
 # --- Auth Endpoints (unprotected) ---
 @app.post("/api/auth/signup")
@@ -127,21 +137,7 @@ def login(data: LoginModel, response: Response):
 
     clear_failed_attempts(email_clean)
     set_auth_cookie(response, user["id"])
-    return {
-        "status": "ok",
-        "user": {"id": user["id"], "name": user["name"], "email": user["email"]}
-    }
-
-@app.post("/api/auth/demo")
-def demo_login(response: Response):
-    user = get_user_by_email("demo@cashpilot.app")
-    if not user:
-        raise HTTPException(status_code=500, detail="Demo account not seeded")
-    set_auth_cookie(response, user["id"])
-    return {
-        "status": "ok",
-        "user": {"id": user["id"], "name": user["name"], "email": user["email"]}
-    }
+    return {"status": "ok", "user": {"id": user["id"], "name": user["name"], "email": user["email"]}}
 
 @app.post("/api/auth/logout")
 def logout(response: Response):
@@ -152,16 +148,30 @@ def logout(response: Response):
 def get_me(user: dict = Depends(get_current_user)):
     return {"status": "ok", "user": user}
 
-# --- Persona & Onboarding Routes ---
+@app.post("/api/auth/demo")
+def login_demo(response: Response):
+    user = get_user_by_email("demo@cashpilot.app")
+    if not user:
+        user = create_user("Demo User", "demo@cashpilot.app", "demo1234")
+    set_auth_cookie(response, user["id"])
+    return {"status": "ok", "user": {"id": user["id"], "name": user["name"], "email": user["email"]}}
+
+# --- Persona & Onboarding Endpoints ---
 @app.get("/api/persona")
 def get_persona_route(user: dict = Depends(get_current_user)):
-    p = get_active_persona(user["id"])
-    return {"status": "ok", "active_persona": p, "personas": ["salaried", "business"]}
+    persona = get_active_persona(user["id"])
+    return {
+        "status": "ok",
+        "active_persona": persona,
+        "personas": ["salaried", "business"]
+    }
 
 @app.post("/api/persona")
 def set_persona_route(data: PersonaModel, user: dict = Depends(get_current_user)):
-    p = set_active_persona(user["id"], data.persona)
-    return {"status": "ok", "active_persona": p}
+    if data.persona not in ["salaried", "business"]:
+        raise HTTPException(status_code=400, detail="Invalid persona type")
+    chosen = set_active_persona(user["id"], data.persona)
+    return {"status": "ok", "active_persona": chosen}
 
 @app.get("/api/profile")
 def get_profile_route(user: dict = Depends(get_current_user)):
@@ -171,31 +181,73 @@ def get_profile_route(user: dict = Depends(get_current_user)):
 
 @app.post("/api/profile")
 def save_profile_route(data: ProfileSaveModel, user: dict = Depends(get_current_user)):
-    persona = data.persona.strip().lower()
-    profile_dict = {
-        "name": data.name,
-        "age": data.age,
-        "salary": data.salary,
-        "secondary_income_amount": data.secondary_income_amount,
-        "secondary_income_label": data.secondary_income_label,
-        "salary_day": data.salary_day,
-        "business_type": data.business_type,
-        "safety_buffer": data.safety_buffer,
-        "revenue_history": data.revenue_history or []
-    }
-    updated = save_profile_data(user["id"], persona, profile_dict)
-    return {"status": "ok", **updated}
+    saved = save_profile_data(user["id"], data.persona, data.dict())
+    return {"status": "ok", **saved}
 
+# --- Statement Upload Endpoint ---
 @app.post("/api/upload")
-async def upload_csv_route(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
-    if not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Only CSV files are supported")
+@app.post("/api/statement/upload")
+async def upload_statement(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
     persona = get_active_persona(user["id"])
     contents = await file.read()
-    result = parse_and_ingest_csv(user["id"], persona, contents)
-    if result.get("status") == "error":
-        raise HTTPException(status_code=400, detail=result.get("message", "Error parsing CSV"))
-    return result
+    res = parse_and_ingest_csv(user["id"], persona, contents)
+    if res.get("status") == "error":
+        raise HTTPException(status_code=400, detail=res.get("message", "Failed to parse CSV statement"))
+    return {"status": "ok", **res}
+
+# --- Calendar Endpoint ---
+@app.get("/api/calendar")
+def get_calendar_route(month: Optional[str] = None, user: dict = Depends(get_current_user)):
+    from backend.calendar_service import get_calendar_data
+    persona = get_active_persona(user["id"])
+    data = get_calendar_data(user["id"], persona, month)
+    return {"status": "ok", **data}
+
+# --- Summary & Alerts Endpoint ---
+@app.get("/api/summary")
+def get_summary_route(user: dict = Depends(get_current_user)):
+    from backend.calendar_service import get_calendar_data
+    persona = get_active_persona(user["id"])
+    cal = get_calendar_data(user["id"], persona)
+    summary = cal["summary"]
+
+    mom = get_mom_comparison(user["id"], persona)
+    anomalies = get_anomalies(user["id"], persona)
+    dip = check_business_income_dip(user["id"]) if persona == "business" else {"triggered": False}
+    commitments = get_fixed_commitments(user["id"], persona)
+
+    alerts = []
+    for o in mom.get("overspent", []):
+        alerts.append({
+            "type": "overspent",
+            "category": o["category"],
+            "message": f"{o['category']} is over budget by ₹{int(o['over_amount']):,} ({o['over_pct']}%)"
+        })
+    for a in anomalies[:3]:
+        alerts.append({
+            "type": "anomaly",
+            "message": f"Unusual spend of ₹{int(a['amount']):,} at {a['merchant']} on {a['date']}"
+        })
+    if dip.get("triggered"):
+        alerts.append({
+            "type": "income_dip",
+            "message": f"Business revenue dip active! Shortfall is ₹{int(dip['shortfall']):,}."
+        })
+
+    anchor_day = 15
+    for c in commitments.get("commitments", []):
+        due_d = int(c.get("day_of_month", 0))
+        if anchor_day <= due_d <= anchor_day + 7:
+            alerts.append({
+                "type": "bill_due",
+                "message": f"Bill '{c['name']}' (₹{int(c['amount']):,}) due in {due_d - anchor_day} days"
+            })
+
+    return {
+        "status": "ok",
+        "summary": summary,
+        "alerts": alerts
+    }
 
 # --- Commitments, MoM, Limits ---
 @app.get("/api/commitments")
@@ -235,6 +287,7 @@ def plan_goal_route(data: GoalPlanModel, user: dict = Depends(get_current_user))
     )
     return {"status": "ok", "plan": plan}
 
+@app.get("/api/dip")
 @app.get("/api/dip-check")
 def dip_check_route(user: dict = Depends(get_current_user)):
     persona = get_active_persona(user["id"])
@@ -250,36 +303,7 @@ def anomaly_route(user: dict = Depends(get_current_user)):
     anomalies = get_anomalies(user["id"], persona)
     return {"status": "ok", "anomalies": anomalies}
 
-@app.get("/api/backtest")
-def backtest_route(user: dict = Depends(get_current_user)):
-    persona = get_active_persona(user["id"])
-    bt = get_backtest_accuracy(user["id"], persona)
-    return {"status": "ok", "backtest": bt}
-
-# --- Gemini AI Status & Insights ---
-@app.get("/api/ai/status")
-def ai_status_route(user: dict = Depends(get_current_user)):
-    from backend.gemini_service import is_gemini_configured, GEMINI_MODELS
-    return {
-        "status": "ok",
-        "enabled": is_gemini_configured(),
-        "provider": "Google Gemini",
-        "model": GEMINI_MODELS[0] if is_gemini_configured() else None
-    }
-
-@app.get("/api/ai/insights")
-def ai_insights_route(user: dict = Depends(get_current_user)):
-    from backend.gemini_service import generate_gemini_smart_insights, is_gemini_configured
-    if not is_gemini_configured():
-        return {"status": "ok", "insights": [], "message": "Gemini not configured"}
-    insights = generate_gemini_smart_insights(user["id"])
-    return {
-        "status": "ok",
-        "insights": insights or [],
-        "ai_powered": True
-    }
-
-# --- Transactions, Forecast, Simulator, Chat ---
+# --- Transactions (GET & POST) ---
 @app.get("/api/transactions")
 def get_transactions(user: dict = Depends(get_current_user)):
     persona = get_active_persona(user["id"])
@@ -296,15 +320,40 @@ def get_transactions(user: dict = Depends(get_current_user)):
         })
     return {"status": "ok", "transactions": output, "has_data": len(output) > 0}
 
-@app.get("/api/forecast")
-def forecast_route(user: dict = Depends(get_current_user)):
+@app.post("/api/transactions")
+def add_transaction_route(data: TransactionAddModel, user: dict = Depends(get_current_user)):
     persona = get_active_persona(user["id"])
-    records = load_user_transactions_persona(user["id"], persona)
-    if not records:
-        return {"status": "empty", "message": "No transactions loaded"}
-    res = get_forecast(user["id"], persona)
-    return {"status": "ok", "data": res}
+    csv_path = get_transactions_path(user["id"], persona)
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+    file_exists = os.path.exists(csv_path)
 
+    amt = abs(float(data.amount))
+    t_type = data.type.strip().lower()
+    if t_type not in ["debit", "credit"]:
+        t_type = "debit"
+
+    cleaned = clean_description(data.description)
+    cat = categorize_transaction(data.description.strip(), cleaned, amt, t_type)
+
+    with open(csv_path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if not file_exists or os.path.getsize(csv_path) == 0:
+            writer.writerow(["date", "description", "cleaned_merchant", "category", "amount", "type"])
+        writer.writerow([data.date.strip(), data.description.strip(), cleaned, cat, str(amt), t_type])
+
+    return {
+        "status": "ok",
+        "transaction": {
+            "date": data.date.strip(),
+            "description": data.description.strip(),
+            "cleaned_merchant": cleaned,
+            "category": cat,
+            "amount": amt,
+            "type": t_type
+        }
+    }
+
+# --- Simulator & Chat ---
 @app.post("/api/simulate")
 def simulate_route(data: SimulateModel, user: dict = Depends(get_current_user)):
     persona = get_active_persona(user["id"])
@@ -316,7 +365,8 @@ def simulate_route(data: SimulateModel, user: dict = Depends(get_current_user)):
         "amount": data.amount,
         "date": data.date,
         "interest_rate": data.interest_rate or 9.0,
-        "name": data.name
+        "name": data.name,
+        "buffer": data.buffer
     }
     result = simulate_scenario(user["id"], scenario, persona)
     return {"status": "ok", "simulation": result}
@@ -327,7 +377,7 @@ def chat_route(data: ChatModel, user: dict = Depends(get_current_user)):
     records = load_user_transactions_persona(user["id"], persona)
     if not records and "laptop" not in data.message.lower() and "plan" not in data.message.lower():
         return {
-            "reply": "Please complete your profile setup and upload a statement to run personalized simulations and forecasting.",
+            "reply": "Please complete your profile setup and upload a statement to explore your cashflow and goals.",
             "simulation": None,
             "intent": "empty_state"
         }
