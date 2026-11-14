@@ -21,9 +21,16 @@ def get_calendar_data(user_id: int, persona: str, month_str: Optional[str] = Non
       summary: {income, spent, reserved_remaining, left_to_spend, balance, buffer}
     }
     """
-    # Default to current month (e.g. 2026-11)
+    # Load all user transactions for active persona
+    all_records = load_user_transactions_persona(user_id, persona)
+    record_months = sorted(list(set(r["date"][:7] for r in all_records if len(r.get("date", "")) >= 7)))
+
+    # Default to latest month with records if available, otherwise current month (2026-11)
     if not month_str:
-        month_str = "2026-11"
+        if record_months:
+            month_str = record_months[-1]
+        else:
+            month_str = "2026-11"
 
     try:
         parts = month_str.split("-")
@@ -35,9 +42,6 @@ def get_calendar_data(user_id: int, persona: str, month_str: Optional[str] = Non
         month_str = "2026-11"
 
     num_days = calendar.monthrange(year, month)[1]
-
-    # Load all user transactions for active persona
-    all_records = load_user_transactions_persona(user_id, persona)
 
     # Filter transactions for requested month
     month_records = [r for r in all_records if r["date"].startswith(month_str)]
@@ -173,11 +177,14 @@ def get_calendar_data(user_id: int, persona: str, month_str: Optional[str] = Non
         day_reserved_unpaid = sum(ri["amount"] for ri in day_reserved if ri["status"] == "Reserved")
 
         # In current month, reserved remaining is the sum of items not yet paid
-        if month_str == "2026-11":
-            if d >= current_day_marker:
-                reserved_remaining_total += day_reserved_unpaid
+        if month_str < "2026-11":
+            day_remaining = 0.0
+        elif month_str == "2026-11":
+            day_remaining = day_reserved_unpaid if d >= current_day_marker else 0.0
         else:
-            reserved_remaining_total += day_reserved_unpaid
+            day_remaining = day_reserved_unpaid
+
+        reserved_remaining_total += day_remaining
 
         month_income_total += day_income
         month_spent_total += day_spent
@@ -199,12 +206,38 @@ def get_calendar_data(user_id: int, persona: str, month_str: Optional[str] = Non
     # Overall ledger balance
     total_credits = sum(r["amount"] for r in all_records if r["type"] == "credit")
     total_debits = sum(r["amount"] for r in all_records if r["type"] == "debit")
-    current_balance = total_credits - total_debits
+
+    baseline_income = float(profile_info.get("baseline_income", 0.0) or 0.0)
+    starting_balance = float(profile.get("starting_balance", 0.0) or 0.0)
+    statement_balance = float(profile.get("statement_balance", 0.0) or 0.0)
+
+    # Determine accurate ledger balance:
+    # 1. If statement has a known closing balance from bank statement, use it
+    # 2. If user set an initial/starting bank balance, use starting_balance + credits - debits
+    # 3. If CSV has credits, use total_credits - total_debits
+    # 4. If CSV only has debits (e.g. expenses-only statement) and 0 credits, baseline monthly income covers debits
+    if statement_balance > 0:
+        current_balance = statement_balance
+    elif starting_balance > 0:
+        current_balance = starting_balance + total_credits - total_debits
+    elif total_credits > 0:
+        current_balance = total_credits - total_debits
+    elif total_debits > 0 and baseline_income > 0:
+        debit_months = len(set(r["date"][:7] for r in all_records if len(r["date"]) >= 7)) or 1
+        effective_credits = max(baseline_income * debit_months, total_debits + buffer_val)
+        current_balance = effective_credits - total_debits
+    else:
+        current_balance = total_credits - total_debits
+
+    # If active month has debits but 0 credits in CSV and total_credits == 0, show baseline income for the month
+    if month_income_total == 0 and month_spent_total > 0 and baseline_income > 0 and total_credits == 0:
+        month_income_total = baseline_income
 
     left_to_spend = current_balance - reserved_remaining_total - buffer_val
 
     return {
         "month": month_str,
+        "available_months": record_months,
         "days": days_data,
         "summary": {
             "income": round(month_income_total, 2),

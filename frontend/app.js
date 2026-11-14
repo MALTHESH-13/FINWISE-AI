@@ -315,11 +315,19 @@ function openProfileModal(persona, existingData) {
       }
     }
 
+    // Starting balance (both personas)
+    const startBalInput = document.getElementById('setup-starting-balance');
+    if (startBalInput) {
+      startBalInput.value = (existingData && existingData.starting_balance) ? existingData.starting_balance : '';
+    }
+
     // Monthly savings transfer (both personas)
     document.getElementById('setup-savings-amount').value = existingData.monthly_savings_amount || 0;
     document.getElementById('setup-savings-day').value = existingData.monthly_savings_day || 30;
   } else {
     document.getElementById('setup-name').value = currentUser.name || '';
+    const startBalInput = document.getElementById('setup-starting-balance');
+    if (startBalInput) startBalInput.value = '';
     document.getElementById('setup-savings-amount').value = 0;
     document.getElementById('setup-savings-day').value = 30;
   }
@@ -351,6 +359,12 @@ async function handleProfileSave() {
       if (m && a > 0) revs.push({ month: m, amount: a });
     });
     payload.revenue_history = revs;
+  }
+
+  // Starting balance (both personas)
+  const startBalInput = document.getElementById('setup-starting-balance');
+  if (startBalInput && startBalInput.value.trim() !== '') {
+    payload.starting_balance = parseFloat(startBalInput.value) || 0.0;
   }
 
   // Monthly savings transfer
@@ -541,13 +555,27 @@ async function refreshAllDashboardPanels() {
 // ==========================================================================
 
 function setupCalendarControls() {
+  const monthSelect = document.getElementById('cal-month-select');
+  if (monthSelect) {
+    monthSelect.addEventListener('change', () => {
+      const val = monthSelect.value;
+      if (val) {
+        const parts = val.split('-');
+        currentCalYear = parseInt(parts[0], 10);
+        currentCalMonth = parseInt(parts[1], 10);
+        loadCalendar(val);
+      }
+    });
+  }
+
   document.getElementById('cal-prev-btn').addEventListener('click', () => {
     currentCalMonth--;
     if (currentCalMonth < 1) {
       currentCalMonth = 12;
       currentCalYear--;
     }
-    loadCalendar();
+    const mStr = `${currentCalYear}-${String(currentCalMonth).padStart(2, '0')}`;
+    loadCalendar(mStr);
   });
 
   document.getElementById('cal-next-btn').addEventListener('click', () => {
@@ -556,12 +584,11 @@ function setupCalendarControls() {
       currentCalMonth = 1;
       currentCalYear++;
     }
-    loadCalendar();
+    const mStr = `${currentCalYear}-${String(currentCalMonth).padStart(2, '0')}`;
+    loadCalendar(mStr);
   });
 
   document.getElementById('cal-today-btn').addEventListener('click', () => {
-    currentCalYear = 2026;
-    currentCalMonth = 11;
     loadCalendar();
   });
 
@@ -602,14 +629,37 @@ function closeDayDetailPanel() {
 }
 
 async function loadCalendar(monthStr) {
-  if (!monthStr) {
-    monthStr = `${currentCalYear}-${String(currentCalMonth).padStart(2, '0')}`;
-  }
-
-  const res = await authFetch(`/api/calendar?month=${monthStr}`);
+  const url = monthStr ? `/api/calendar?month=${monthStr}` : '/api/calendar';
+  const res = await authFetch(url);
   if (!res) return;
   const data = await res.json();
   calendarCache = data;
+
+  if (data.month) {
+    const parts = data.month.split('-');
+    currentCalYear = parseInt(parts[0], 10);
+    currentCalMonth = parseInt(parts[1], 10);
+  }
+
+  // Update Month Title
+  document.getElementById('cal-month-title').textContent = `${MONTH_NAMES[currentCalMonth - 1]} ${currentCalYear}`;
+
+  // Populate & sync available months dropdown
+  const monthSelect = document.getElementById('cal-month-select');
+  if (monthSelect && data.available_months && data.available_months.length > 0) {
+    monthSelect.innerHTML = '';
+    data.available_months.forEach(m => {
+      const opt = document.createElement('option');
+      opt.value = m;
+      const [y, mn] = m.split('-');
+      opt.textContent = `${MONTH_NAMES[parseInt(mn, 10) - 1]} ${y}`;
+      if (m === data.month) opt.selected = true;
+      monthSelect.appendChild(opt);
+    });
+    monthSelect.style.display = 'inline-block';
+  } else if (monthSelect) {
+    monthSelect.style.display = 'none';
+  }
 
   // Update KPI strip
   const s = data.summary || {};
@@ -669,7 +719,9 @@ function renderCalendarGrid(data) {
     const dateStr = `${currentCalYear}-${String(currentCalMonth).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
     const dayData = daysMap[day] || { spend: [], income: [], reserved: [], totals: { spent: 0, income: 0, reserved: 0 }, has_anomaly: false };
 
-    const isToday = (currentCalYear === 2026 && currentCalMonth === 11 && day === 15);
+    const now = new Date();
+    const isToday = (currentCalYear === 2026 && currentCalMonth === 11 && day === 15) ||
+                    (currentCalYear === now.getFullYear() && currentCalMonth === (now.getMonth() + 1) && day === now.getDate());
 
     const cell = document.createElement('div');
     cell.className = 'cal-day-cell';

@@ -239,6 +239,7 @@ def parse_and_ingest_csv(user_id: int, persona: str, file_contents: bytes) -> Di
     debit_col = -1
     credit_col = -1
     type_col = -1
+    balance_col = -1
 
     for idx, col in enumerate(header):
         c = col.lower().replace("_", " ").replace("-", " ")
@@ -254,6 +255,8 @@ def parse_and_ingest_csv(user_id: int, persona: str, file_contents: bytes) -> Di
             if credit_col == -1: credit_col = idx
         elif any(k in c for k in ["type", "cr/dr", "transaction type"]):
             if type_col == -1: type_col = idx
+        elif any(k in c for k in ["balance", "closing balance", "running balance", "avail bal"]):
+            if balance_col == -1: balance_col = idx
 
     if date_col == -1 or desc_col == -1 or (amount_col == -1 and debit_col == -1 and credit_col == -1):
         # Fallback to positional: Date(0), Desc(1), Amount(2), Type(3)
@@ -264,6 +267,7 @@ def parse_and_ingest_csv(user_id: int, persona: str, file_contents: bytes) -> Di
 
     parsed_records = []
     warnings = []
+    last_closing_balance = None
 
     date_patterns = [
         "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%Y/%m/%d",
@@ -326,6 +330,15 @@ def parse_and_ingest_csv(user_id: int, persona: str, file_contents: bytes) -> Di
             cleaned = clean_description(raw_desc)
             cat = categorize_transaction(raw_desc, cleaned, amt, tx_type)
 
+            if balance_col != -1 and balance_col < len(row):
+                bal_s = row[balance_col].strip().replace(",", "").replace("₹", "").replace("Rs", "")
+                try:
+                    b_val = float(bal_s)
+                    if b_val > 0:
+                        last_closing_balance = b_val
+                except Exception:
+                    pass
+
             parsed_records.append({
                 "date": parsed_date,
                 "description": raw_desc,
@@ -363,6 +376,11 @@ def parse_and_ingest_csv(user_id: int, persona: str, file_contents: bytes) -> Di
         if monthly_credits:
             prof["revenue_history"] = [{"month": k, "amount": round(v, 2)} for k, v in sorted(monthly_credits.items())]
             save_profile_data(user_id, persona, prof)
+
+    if last_closing_balance is not None and last_closing_balance > 0:
+        prof = get_profile_data(user_id, persona)["profile"]
+        prof["statement_balance"] = round(last_closing_balance, 2)
+        save_profile_data(user_id, persona, prof)
 
     return {
         "status": "ok",
@@ -627,6 +645,13 @@ def check_business_income_dip(user_id: int) -> Dict[str, Any]:
     elapsed_days = anchor_date.day
     days_in_month = 30
     curr_m_str = anchor_date.strftime("%Y-%m")
+
+    # If current month has no transactions, evaluate the latest transaction month
+    record_months = sorted(list(set(r["date"][:7] for r in records if len(r["date"]) >= 7)))
+    if curr_m_str not in record_months and record_months:
+        curr_m_str = record_months[-1]
+        elapsed_days = 30
+        days_in_month = 30
 
     # Month to date inflow
     mtd_inflows = [r["amount"] for r in records if r["type"] == "credit" and r["date"].startswith(curr_m_str)]

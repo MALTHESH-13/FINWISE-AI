@@ -114,15 +114,30 @@ def simulate_scenario(user_id: int, scenario: Dict[str, Any], persona: Optional[
     num_days = calendar.monthrange(year, month)[1]
     curr_month_prefix = f"{year}-{month:02d}"
 
-    # Calculate current ledger balance
-    credits = sum(r["amount"] for r in records if r["type"] == "credit")
-    debits = sum(r["amount"] for r in records if r["type"] == "debit")
-    current_balance = credits - debits
-
     # Profile settings
     prof_info = get_profile_data(user_id, persona)
     profile = prof_info.get("profile", {})
     baseline_income = prof_info.get("baseline_income", 0.0)
+
+    # Calculate current ledger balance
+    credits = sum(r["amount"] for r in records if r["type"] == "credit")
+    debits = sum(r["amount"] for r in records if r["type"] == "debit")
+
+    starting_balance = float(profile.get("starting_balance", 0.0) or 0.0)
+    statement_balance = float(profile.get("statement_balance", 0.0) or 0.0)
+
+    if statement_balance > 0:
+        current_balance = statement_balance
+    elif starting_balance > 0:
+        current_balance = starting_balance + credits - debits
+    elif credits > 0:
+        current_balance = credits - debits
+    elif debits > 0 and baseline_income > 0:
+        debit_months = len(set(r["date"][:7] for r in records if len(r["date"]) >= 7)) or 1
+        effective_credits = max(baseline_income * debit_months, debits + 10000.0)
+        current_balance = effective_credits - debits
+    else:
+        current_balance = credits - debits
 
     # Buffer: from scenario parameter, or profile safety buffer, or default 10,000
     scenario_buffer = scenario.get("buffer")

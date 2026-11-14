@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CashPilot - Intelligent Cashflow & Planning</title>
-  <link rel="stylesheet" href="/style.css?v=2.2">
+  <link rel="stylesheet" href="/style.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <script src="/chart.min.js"></script>
@@ -156,6 +156,13 @@
           </div>
         </div>
 
+        <!-- Starting Bank Balance (Both Personas) -->
+        <div class="form-group">
+          <label for="setup-starting-balance">Starting Bank Balance (₹, Optional)</label>
+          <input type="number" id="setup-starting-balance" class="form-control" min="0" placeholder="e.g. 100000" value="">
+          <small class="field-hint">Initial opening balance in your bank account before statement transactions.</small>
+        </div>
+
         <!-- Monthly Savings Transfer (Both Personas) -->
         <div class="form-row">
           <div class="form-group flex-1">
@@ -285,6 +292,7 @@
             <h2 class="cal-month-title" id="cal-month-title">November 2026</h2>
             <button type="button" class="cal-nav-btn" id="cal-next-btn" title="Next Month">›</button>
             <button type="button" class="cal-today-btn" id="cal-today-btn">Today</button>
+            <select id="cal-month-select" class="form-control" style="width: auto; height: 32px; padding: 2px 8px; font-size: 0.85rem; margin-left: 6px; display: none;" title="Jump to month"></select>
           </div>
           <div class="cal-nav-right">
             <span class="text-sm text-muted">Click any day to view details or log transactions</span>
@@ -928,6 +936,6 @@
     </div>
   </div>
 
-  <script src="/app.js?v=2.2"></script>
+  <script src="/app.js"></script>
 </body>
 </html>

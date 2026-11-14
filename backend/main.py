@@ -85,6 +85,8 @@ class ProfileSaveModel(BaseModel):
     # Savings transfer
     monthly_savings_amount: Optional[float] = 0.0
     monthly_savings_day: Optional[int] = None
+    # Starting/Current Bank Balance
+    starting_balance: Optional[float] = 0.0
 
 class LimitsModel(BaseModel):
     limits: Dict[str, float]
@@ -408,40 +410,17 @@ def simulate_route(data: SimulateModel, user: dict = Depends(get_current_user)):
 
 @app.post("/api/chat")
 def chat_route(data: ChatModel, user: dict = Depends(get_current_user)):
-    persona = get_active_persona(user["id"])
-    records = load_user_transactions_persona(user["id"], persona)
-    if not records and "laptop" not in data.message.lower() and "plan" not in data.message.lower():
-        return {
-            "reply": "Please complete your profile setup and upload a statement to explore your cashflow and goals.",
-            "simulation": None,
-            "intent": "empty_state"
-        }
     res = handle_chat_message(user["id"], data.message, data.history)
     return res
 
-# --- Cache Control Middleware & Static Frontend Serving ---
-@app.middleware("http")
-async def add_no_cache_headers(request: Request, call_next):
-    response = await call_next(request)
-    if any(request.url.path.endswith(ext) for ext in [".html", ".js", ".css"]) or request.url.path in ["/", "/login.html"]:
-        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-        response.headers["Pragma"] = "no-cache"
-        response.headers["Expires"] = "0"
-    return response
-
+# --- Static Frontend Serving ---
 @app.get("/login.html")
 def serve_login():
-    return FileResponse(
-        os.path.join(FRONTEND_DIR, "login.html"),
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
-    )
+    return FileResponse(os.path.join(FRONTEND_DIR, "login.html"))
 
 @app.get("/")
 def serve_root():
-    return FileResponse(
-        os.path.join(FRONTEND_DIR, "index.html"),
-        headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
-    )
+    return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
 
 if os.path.exists(FRONTEND_DIR):
     app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="static")
