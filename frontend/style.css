@@ -158,6 +158,26 @@ body {
   background: var(--primary-hover);
 }
 
+.btn-delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  background: #FEE2E2;
+  color: #DC2626;
+  border: 1px solid #FECACA;
+  padding: 0.45rem 0.85rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-delete:hover {
+  background: #DC2626;
+  color: #FFFFFF;
+}
+
 /* User Profile & Logout */
 .user-profile {
   display: flex;

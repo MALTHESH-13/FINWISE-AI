@@ -8,6 +8,7 @@ let narrationViewMode = 'cleaned'; // 'cleaned' or 'raw'
 let goalsChatHistory = [];
 let copilotChatHistory = [];
 let dipAutoMessageSent = false;
+let cachedTransactionsList = [];
 
 // Calendar navigation state
 let currentCalYear = 2026;
@@ -113,7 +114,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Setup persona controls & onboarding
   setupPersonaControls();
 
-  // Setup statement upload (drag & drop and file input)
+  // Setup statement upload and delete
   setupStatementUpload();
 
   // Setup calendar controls (month navigation & day side panel)
@@ -173,7 +174,7 @@ function setupNavigationTabs() {
       else if (targetId === 'tab-budget') window.location.hash = '#/budget';
       else if (targetId === 'tab-simulator') window.location.hash = '#/simulator';
 
-      // Refresh charts when switching to tabs
+      // Refresh charts when switching to dashboard tab
       if (targetId === 'tab-dashboard' && momChartInstance) {
         setTimeout(() => momChartInstance.resize(), 100);
       }
@@ -422,41 +423,75 @@ async function checkProfileAndLoadData() {
   await refreshAllDashboardPanels();
 }
 
-// Statement Ingestion (Drag-and-Drop and File Input)
+// Statement Ingestion & Deletion
 function setupStatementUpload() {
   const dropzone = document.getElementById('dashboard-dropzone');
   const fileInput = document.getElementById('csv-file-input');
+  const btnDelete = document.getElementById('btn-delete-statement');
 
-  ['dragenter', 'dragover'].forEach(name => {
-    dropzone.addEventListener(name, (e) => {
-      e.preventDefault();
-      dropzone.classList.add('dragover');
+  if (dropzone) {
+    ['dragenter', 'dragover'].forEach(name => {
+      dropzone.addEventListener(name, (e) => {
+        e.preventDefault();
+        dropzone.classList.add('dragover');
+      });
     });
-  });
 
-  ['dragleave', 'drop'].forEach(name => {
-    dropzone.addEventListener(name, (e) => {
-      e.preventDefault();
-      dropzone.classList.remove('dragover');
+    ['dragleave', 'drop'].forEach(name => {
+      dropzone.addEventListener(name, (e) => {
+        e.preventDefault();
+        dropzone.classList.remove('dragover');
+      });
     });
-  });
 
-  dropzone.addEventListener('drop', async (e) => {
-    const files = e.dataTransfer.files;
-    if (files.length > 0) {
-      await handleFileUpload(files[0]);
-    }
-  });
+    dropzone.addEventListener('drop', async (e) => {
+      const files = e.dataTransfer.files;
+      if (files.length > 0) {
+        await handleFileUpload(files[0]);
+      }
+    });
+  }
 
-  fileInput.addEventListener('change', async () => {
-    if (fileInput.files.length > 0) {
-      await handleFileUpload(fileInput.files[0]);
-    }
-  });
+  if (fileInput) {
+    fileInput.addEventListener('change', async () => {
+      if (fileInput.files.length > 0) {
+        await handleFileUpload(fileInput.files[0]);
+        fileInput.value = ''; // reset so same file can be chosen again
+      }
+    });
+  }
+
+  // Clear / Delete Statement Button
+  if (btnDelete) {
+    btnDelete.addEventListener('click', async () => {
+      if (!confirm('Are you sure you want to delete your uploaded bank statement? This will clear all transactions and reset your dashboard.')) {
+        return;
+      }
+      btnDelete.disabled = true;
+      btnDelete.textContent = 'Clearing...';
+
+      const res = await authFetch('/api/statement', { method: 'DELETE' });
+      btnDelete.disabled = false;
+      btnDelete.innerHTML = `
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="3 6 5 6 21 6"></polyline>
+          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+        </svg>
+        <span>Clear Statement</span>
+      `;
+
+      if (res && res.ok) {
+        await refreshAllDashboardPanels();
+        alert('Bank statement deleted successfully. Dashboard reset.');
+      } else {
+        alert('Failed to delete statement.');
+      }
+    });
+  }
 }
 
 async function handleFileUpload(file) {
-  if (!file.name.endsWith('.csv')) {
+  if (!file.name.toLowerCase().endsWith('.csv')) {
     alert('Please upload a valid CSV bank statement.');
     return;
   }
@@ -470,6 +505,8 @@ async function handleFileUpload(file) {
   });
 
   if (res && res.ok) {
+    const json = await res.json();
+    alert(`Statement uploaded successfully! ${json.count || 0} transactions imported.`);
     await refreshAllDashboardPanels();
   } else {
     const err = await res.json();
@@ -485,9 +522,15 @@ async function refreshAllDashboardPanels() {
     loadMoMComparison(),
     loadTransactions(),
     loadBudgetLimits(),
-    loadAnomaliesTable(),
     checkBusinessDip()
   ]);
+
+  // Update clear button visibility
+  const btnDelete = document.getElementById('btn-delete-statement');
+  if (btnDelete) {
+    const hasData = cachedTransactionsList && cachedTransactionsList.length > 0;
+    btnDelete.style.display = hasData ? 'inline-flex' : 'none';
+  }
 }
 
 // ==========================================================================
@@ -636,10 +679,7 @@ function renderCalendarGrid(data) {
 
     const anomalyDotHtml = dayData.has_anomaly ? `<span class="cal-anomaly-indicator" title="Unusual transaction detected"></span>` : '';
 
-    // Collect chips:
-    // a) Income items
-    // b) Spend items
-    // c) Reserved items (Paid vs Reserved)
+    // Collect chips
     const allItems = [];
     dayData.income.forEach(item => allItems.push({ kind: 'income', item }));
     dayData.spend.forEach(item => allItems.push({ kind: 'spend', item }));
@@ -701,7 +741,7 @@ function renderCalendarGrid(data) {
     grid.appendChild(cell);
   }
 
-  // Trailing days from next month to complete 6-row (42 cells) or 5-row grid
+  // Trailing days from next month to complete grid
   const totalRendered = firstDayOfWeek + daysInCurrentMonth;
   const targetTotal = totalRendered > 35 ? 42 : 35;
   const trailingCount = targetTotal - totalRendered;
@@ -722,7 +762,6 @@ function openDayDetailPanel(dateStr, dayData) {
   const panel = document.getElementById('cal-side-panel');
   const backdrop = document.getElementById('cal-panel-backdrop');
 
-  // Format date header nicely
   try {
     const dObj = new Date(dateStr + 'T00:00:00');
     const options = { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric' };
@@ -807,25 +846,25 @@ async function loadCommitments() {
 
   const emptyEl = document.getElementById('commitments-empty');
   const tableEl = document.getElementById('commitments-table');
-  const tbody = tableEl.querySelector('tbody');
+  const tbody = tableEl ? tableEl.querySelector('tbody') : null;
   const metricTotal = document.getElementById('metric-commitments-total');
 
   // Also full recurring tab
-  const recEmpty = document.getElementById('recurring-empty');
-  const recTable = document.getElementById('recurring-full-table');
+  const recEmpty = document.getElementById('recurring-tab-empty');
+  const recTable = document.getElementById('recurring-tab-table');
   const recTbody = recTable ? recTable.querySelector('tbody') : null;
 
-  if (!json.has_data || json.commitments.length === 0) {
-    emptyEl.style.display = 'flex';
-    tableEl.style.display = 'none';
+  if (!json.has_data || !json.commitments || json.commitments.length === 0) {
+    if (emptyEl) emptyEl.style.display = 'flex';
+    if (tableEl) tableEl.style.display = 'none';
     if (recEmpty) recEmpty.style.display = 'flex';
     if (recTable) recTable.style.display = 'none';
     if (metricTotal) metricTotal.textContent = '₹0';
     return;
   }
 
-  emptyEl.style.display = 'none';
-  tableEl.style.display = 'table';
+  if (emptyEl) emptyEl.style.display = 'none';
+  if (tableEl) tableEl.style.display = 'table';
   if (recEmpty) recEmpty.style.display = 'none';
   if (recTable) recTable.style.display = 'table';
 
@@ -836,13 +875,24 @@ async function loadCommitments() {
       <td><strong>${escapeHtml(c.name)}</strong></td>
       <td><span class="badge badge-info">${escapeHtml(c.category)}</span></td>
       <td>${formatINR(c.amount)}</td>
-      <td>${escapeHtml(c.next_due_date)}</td>
-      <td><strong>${c.days_left} days</strong></td>
+      <td>${escapeHtml(c.next_due_date || 'Monthly')}</td>
+      <td><strong>${c.days_left !== undefined ? c.days_left + ' days' : 'Scheduled'}</strong></td>
     </tr>
   `).join('');
 
-  tbody.innerHTML = rowsHtml;
-  if (recTbody) recTbody.innerHTML = rowsHtml;
+  if (tbody) tbody.innerHTML = rowsHtml;
+
+  if (recTbody) {
+    recTbody.innerHTML = json.commitments.map(c => `
+      <tr>
+        <td><strong>${escapeHtml(c.name)}</strong></td>
+        <td><span class="badge badge-info">${escapeHtml(c.category)}</span></td>
+        <td>${formatINR(c.amount)}</td>
+        <td>Monthly</td>
+        <td><strong>Day ${c.day_of_month || 5}</strong> (${c.days_left} days left)</td>
+      </tr>
+    `).join('');
+  }
 }
 
 function setupDashboardControls() {
@@ -869,35 +919,36 @@ async function loadMoMComparison() {
   const overspentBox = document.getElementById('mom-overspent-container');
   const overspentTags = document.getElementById('mom-overspent-tags');
 
-  if (!json.has_data || json.categories.length === 0) {
-    emptyEl.style.display = 'flex';
-    canvas.style.display = 'none';
-    overspentBox.style.display = 'none';
+  if (!json.has_data || !json.categories || json.categories.length === 0) {
+    if (emptyEl) emptyEl.style.display = 'flex';
+    if (canvas) canvas.style.display = 'none';
+    if (overspentBox) overspentBox.style.display = 'none';
     if (momChartInstance) { momChartInstance.destroy(); momChartInstance = null; }
     return;
   }
 
-  emptyEl.style.display = 'none';
-  canvas.style.display = 'block';
+  if (emptyEl) emptyEl.style.display = 'none';
+  if (canvas) canvas.style.display = 'block';
 
   // Render overspent alerts
   if (json.overspent && json.overspent.length > 0) {
-    overspentBox.style.display = 'flex';
-    overspentTags.innerHTML = json.overspent.map(o => `
-      <span class="overspent-tag">
-        ⚠️ ${escapeHtml(o.category)}: Over by ${formatINR(o.over_amount)} (${o.over_pct}%)
-      </span>
-    `).join('');
+    if (overspentBox) overspentBox.style.display = 'flex';
+    if (overspentTags) {
+      overspentTags.innerHTML = json.overspent.map(o => `
+        <span class="overspent-tag">
+          ⚠️ ${escapeHtml(o.category)}: Over by ${formatINR(o.over_amount)} (${o.over_pct}%)
+        </span>
+      `).join('');
+    }
   } else {
-    overspentBox.style.display = 'none';
+    if (overspentBox) overspentBox.style.display = 'none';
   }
 
   // Destroy previous Chart instance
   if (momChartInstance) momChartInstance.destroy();
 
-  // Color current month bars: red if over limit, primary blue if within limit
   const currentMonthColors = json.categories.map(cat => {
-    const isOver = json.overspent.some(o => o.category === cat);
+    const isOver = json.overspent && json.overspent.some(o => o.category === cat);
     return isOver ? '#DC2626' : '#2563EB';
   });
 
@@ -910,7 +961,7 @@ async function loadMoMComparison() {
         labels: json.categories,
         datasets: [
           {
-            label: json.previous_month_label,
+            label: json.previous_month_label || 'Previous Month',
             data: json.previous_month_spending,
             backgroundColor: '#94A3B8',
             borderColor: '#64748B',
@@ -918,7 +969,7 @@ async function loadMoMComparison() {
             borderRadius: 4
           },
           {
-            label: json.current_month_label,
+            label: json.current_month_label || 'Current Month',
             data: json.current_month_spending,
             backgroundColor: currentMonthColors,
             borderColor: currentMonthColors,
@@ -978,7 +1029,7 @@ async function loadMoMComparison() {
         labels: json.categories,
         datasets: [
           {
-            label: json.previous_month_label,
+            label: json.previous_month_label || 'Previous Month',
             data: json.previous_month_spending,
             borderColor: '#94A3B8',
             backgroundColor: 'rgba(148, 163, 184, 0.1)',
@@ -986,7 +1037,7 @@ async function loadMoMComparison() {
             fill: false
           },
           {
-            label: json.current_month_label,
+            label: json.current_month_label || 'Current Month',
             data: json.current_month_spending,
             borderColor: '#2563EB',
             backgroundColor: 'rgba(37, 99, 235, 0.1)',
@@ -1032,11 +1083,11 @@ async function loadMoMComparison() {
 }
 
 // ==========================================================================
-// TRANSACTIONS & ANOMALIES TAB
+// TRANSACTIONS TAB
 // ==========================================================================
 
 function setupTransactionsTab() {
-  const toggle = document.getElementById('narration-view-toggle');
+  const toggle = document.getElementById('narration-view-control');
   if (!toggle) return;
   const btns = toggle.querySelectorAll('.btn-pill');
   btns.forEach(b => {
@@ -1049,8 +1100,6 @@ function setupTransactionsTab() {
   });
 }
 
-let cachedTransactionsList = [];
-
 async function loadTransactions() {
   const res = await authFetch('/api/transactions');
   if (!res) return;
@@ -1062,15 +1111,16 @@ async function loadTransactions() {
 function renderTransactionsTable() {
   const emptyEl = document.getElementById('transactions-empty');
   const tableEl = document.getElementById('transactions-table');
+  if (!tableEl) return;
   const tbody = tableEl.querySelector('tbody');
 
   if (cachedTransactionsList.length === 0) {
-    emptyEl.style.display = 'flex';
+    if (emptyEl) emptyEl.style.display = 'flex';
     tableEl.style.display = 'none';
     return;
   }
 
-  emptyEl.style.display = 'none';
+  if (emptyEl) emptyEl.style.display = 'none';
   tableEl.style.display = 'table';
 
   tbody.innerHTML = cachedTransactionsList.map(t => {
@@ -1089,40 +1139,10 @@ function renderTransactionsTable() {
         <td><strong>${escapeHtml(merchantDisplay)}</strong></td>
         <td><span class="badge" style="background:${catCol.bg};color:${catCol.text};">${escapeHtml(t.category)}</span></td>
         <td class="${amtClass}">${amtStr}</td>
+        <td><span class="badge ${isCredit ? 'badge-success' : 'badge-danger'}">${t.type.toUpperCase()}</span></td>
       </tr>
     `;
   }).join('');
-}
-
-async function loadAnomaliesTable() {
-  const anomRes = await authFetch('/api/anomaly');
-  if (anomRes && anomRes.ok) {
-    const json = await anomRes.json();
-    const anomalies = json.anomalies || [];
-    const emptyEl = document.getElementById('anomalies-empty');
-    const tableEl = document.getElementById('anomalies-table');
-    if (!emptyEl || !tableEl) return;
-    const tbody = tableEl.querySelector('tbody');
-
-    if (anomalies.length === 0) {
-      emptyEl.style.display = 'flex';
-      tableEl.style.display = 'none';
-      return;
-    }
-
-    emptyEl.style.display = 'none';
-    tableEl.style.display = 'table';
-    tbody.innerHTML = anomalies.map(a => `
-      <tr>
-        <td>${escapeHtml(a.date)}</td>
-        <td><strong>${escapeHtml(a.merchant)}</strong></td>
-        <td><span class="badge badge-info">${escapeHtml(a.category)}</span></td>
-        <td class="text-red font-bold">${formatINR(a.amount)}</td>
-        <td>${formatINR(a.threshold)}</td>
-        <td><span class="badge ${a.severity === 'High' ? 'badge-danger' : 'badge-warning'}">${a.severity}</span></td>
-      </tr>
-    `).join('');
-  }
 }
 
 // ==========================================================================
@@ -1130,11 +1150,12 @@ async function loadAnomaliesTable() {
 // ==========================================================================
 
 function setupBudgetTab() {
-  const form = document.getElementById('budget-limits-form');
-  if (!form) return;
-  form.addEventListener('submit', async (e) => {
+  const btnSave = document.getElementById('btn-save-limits');
+  if (!btnSave) return;
+
+  btnSave.addEventListener('click', async (e) => {
     e.preventDefault();
-    const inputs = document.querySelectorAll('#limits-editor-grid input');
+    const inputs = document.querySelectorAll('#limits-editor-container input');
     const limits = {};
     inputs.forEach(inp => {
       const cat = inp.getAttribute('data-cat');
@@ -1150,7 +1171,9 @@ function setupBudgetTab() {
 
     if (res && res.ok) {
       await refreshAllDashboardPanels();
-      alert('Budget limits updated successfully.');
+      alert('Budget limits saved successfully.');
+    } else {
+      alert('Failed to save budget limits.');
     }
   });
 }
@@ -1161,12 +1184,16 @@ async function loadBudgetLimits() {
   const json = await res.json();
   const limits = json.limits || {};
 
-  const grid = document.getElementById('limits-editor-grid');
+  const grid = document.getElementById('limits-editor-container');
   if (!grid) return;
+
   grid.innerHTML = Object.entries(limits).map(([cat, val]) => `
-    <div class="limit-item">
-      <label>${escapeHtml(cat)}</label>
-      <input type="number" class="form-control" data-cat="${escapeHtml(cat)}" value="${val}" min="0">
+    <div class="limit-item card" style="padding: 1rem; border: 1px solid var(--border); border-radius: 8px;">
+      <label style="font-weight: 600; display: block; margin-bottom: 0.4rem;">${escapeHtml(cat)}</label>
+      <div style="display: flex; align-items: center; gap: 0.4rem;">
+        <span style="font-weight: 600; color: var(--muted);">₹</span>
+        <input type="number" class="form-control" data-cat="${escapeHtml(cat)}" value="${val}" min="0">
+      </div>
     </div>
   `).join('');
 }
@@ -1177,38 +1204,52 @@ async function loadBudgetLimits() {
 
 function setupSimulatorTab() {
   const simType = document.getElementById('sim-type');
-  const rateGroup = document.getElementById('interest-rate-group');
+  const rateGroup = document.getElementById('sim-rate-group');
+  const nameGroup = document.getElementById('sim-name-group');
   const form = document.getElementById('simulator-form');
+  const simDateInput = document.getElementById('sim-date');
 
-  simType.addEventListener('change', () => {
-    rateGroup.style.display = simType.value === 'prepay_loan' ? 'block' : 'none';
-  });
+  // Default effective date to today or anchor date
+  if (simDateInput && !simDateInput.value) {
+    simDateInput.value = '2026-11-20';
+  }
 
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const type = simType.value;
-    const amount = parseFloat(document.getElementById('sim-amount').value);
-    const date = document.getElementById('sim-date').value;
-    const interest_rate = parseFloat(document.getElementById('sim-interest-rate').value) || 9.0;
-
-    const res = await authFetch('/api/simulate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, amount, date, interest_rate })
+  if (simType) {
+    simType.addEventListener('change', () => {
+      if (rateGroup) rateGroup.style.display = simType.value === 'prepay_loan' ? 'block' : 'none';
+      if (nameGroup) nameGroup.style.display = simType.value === 'cancel_subscription' ? 'block' : 'none';
     });
+  }
 
-    if (res && res.ok) {
-      const json = await res.json();
-      displaySimulatorResult(json.simulation, { type, amount, date, interest_rate });
-    } else {
-      const err = await res.json();
-      alert(err.detail || 'Simulation failed.');
-    }
-  });
+  if (form) {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const type = simType.value;
+      const amount = parseFloat(document.getElementById('sim-amount').value) || 0;
+      const date = document.getElementById('sim-date').value || '2026-11-20';
+      const interest_rate = parseFloat(document.getElementById('sim-rate').value) || 9.0;
+      const buffer = parseFloat(document.getElementById('sim-buffer').value) || 10000.0;
+
+      const res = await authFetch('/api/simulate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, amount, date, interest_rate, buffer })
+      });
+
+      if (res && res.ok) {
+        const json = await res.json();
+        displaySimulatorResult(json.simulation, { type, amount, date, interest_rate });
+      } else {
+        const err = await res.json();
+        alert(err.detail || 'Simulation failed.');
+      }
+    });
+  }
 }
 
 function displaySimulatorResult(sim, sc) {
-  const resultsArea = document.getElementById('sim-results-area');
+  const resultsArea = document.getElementById('simulator-results-area');
+  if (!resultsArea) return;
   resultsArea.style.display = 'block';
 
   const verdict = sim.verdict || 'Safe';
@@ -1216,27 +1257,32 @@ function displaySimulatorResult(sim, sc) {
   document.getElementById('sim-verdict-desc').textContent = `Simulated ${sc.type.replace('_', ' ')} of ${formatINR(sc.amount)} on ${sc.date}.`;
 
   const banner = document.getElementById('sim-verdict-banner');
+  const icon = document.getElementById('sim-verdict-icon');
+
   if (verdict === 'Safe') {
     banner.style.borderLeftColor = '#16A34A';
     banner.style.background = '#F0FDF4';
+    if (icon) icon.textContent = '✅';
   } else if (verdict === 'Risky') {
     banner.style.borderLeftColor = '#D97706';
     banner.style.background = '#FFFBEB';
+    if (icon) icon.textContent = '⚠️';
   } else {
     banner.style.borderLeftColor = '#DC2626';
     banner.style.background = '#FEF2F2';
+    if (icon) icon.textContent = '🛑';
   }
 
   // Prepay Card
-  const prepayCard = document.getElementById('prepay-summary-card');
-  if (sc.type === 'prepay_loan' && sim.interest_saved !== undefined) {
-    prepayCard.style.display = 'block';
-    document.getElementById('prepay-cash-dip').textContent = formatINR(sc.amount);
-    document.getElementById('prepay-interest-saved').textContent = formatINR(sim.interest_saved);
-    document.getElementById('prepay-tenure-reduced').textContent = `${sim.tenure_reduced_months || 0} months reduction`;
-    document.getElementById('prepay-assumed-rate').textContent = `${sc.interest_rate || 9}% p.a.`;
+  const prepayBox = document.getElementById('sim-prepay-box');
+  if (sc.type === 'prepay_loan') {
+    if (prepayBox) prepayBox.style.display = 'grid';
+    const pp = sim.prepay_details || {};
+    document.getElementById('sim-prepay-dip').textContent = formatINR(sc.amount);
+    document.getElementById('sim-prepay-saved').textContent = formatINR(sim.interest_saved !== undefined ? sim.interest_saved : (pp.interest_saved || 0));
+    document.getElementById('sim-prepay-tenure').textContent = `${(pp.tenure_reduced_months || sim.tenure_reduced_months || 0)} mos`;
   } else {
-    prepayCard.style.display = 'none';
+    if (prepayBox) prepayBox.style.display = 'none';
   }
 
   // Min and month-end balances
@@ -1247,23 +1293,31 @@ function displaySimulatorResult(sim, sc) {
 
   // Bill-Level Obligations Status Table
   const tbody = document.querySelector('#sim-obligations-table tbody');
-  tbody.innerHTML = (sim.obligations_status || []).map(ob => {
-    function getStatusBadge(status) {
-      if (status === 'Covered') return '<span class="badge badge-success">Covered</span>';
-      if (status === 'Tight') return '<span class="badge badge-warning">Tight</span>';
-      return '<span class="badge badge-danger">Short</span>';
-    }
+  const obs = sim.obligations_status || sim.obligations || [];
 
-    return `
-      <tr>
-        <td><strong>${escapeHtml(ob.name)}</strong></td>
-        <td>${escapeHtml(ob.date)}</td>
-        <td>${formatINR(ob.amount)}</td>
-        <td>${getStatusBadge(ob.status_before)}</td>
-        <td>${getStatusBadge(ob.status_after)}</td>
-      </tr>
-    `;
-  }).join('');
+  if (tbody) {
+    if (obs.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="5" class="text-center text-muted">No scheduled commitments for the rest of this month.</td></tr>`;
+    } else {
+      tbody.innerHTML = obs.map(ob => {
+        function getStatusBadge(status) {
+          if (status === 'Covered') return '<span class="badge badge-success">Covered</span>';
+          if (status === 'Tight') return '<span class="badge badge-warning">Tight</span>';
+          return '<span class="badge badge-danger">Short</span>';
+        }
+
+        return `
+          <tr>
+            <td><strong>${escapeHtml(ob.name)}</strong></td>
+            <td>${escapeHtml(ob.date || ob.due_date)}</td>
+            <td>${formatINR(ob.amount)}</td>
+            <td>${getStatusBadge(ob.status_before)}</td>
+            <td>${getStatusBadge(ob.status_after)}</td>
+          </tr>
+        `;
+      }).join('');
+    }
+  }
 }
 
 // ==========================================================================
@@ -1271,8 +1325,9 @@ function displaySimulatorResult(sim, sc) {
 // ==========================================================================
 
 async function checkBusinessDip() {
+  const banner = document.getElementById('business-dip-banner');
   if (currentPersona !== 'business') {
-    document.getElementById('business-dip-banner').style.display = 'none';
+    if (banner) banner.style.display = 'none';
     return;
   }
 
@@ -1280,20 +1335,20 @@ async function checkBusinessDip() {
   if (!res) return;
   const json = await res.json();
 
-  const banner = document.getElementById('business-dip-banner');
-  if (json.triggered) {
-    banner.style.display = 'flex';
-    document.getElementById('dip-banner-title').textContent = `Income Dip Detected: Shortfall of ${formatINR(json.shortfall)}`;
-    document.getElementById('dip-banner-desc').textContent =
-      `Month-to-date inflow is ${formatINR(json.actual_mtd_inflow)}, falling below baseline target. Recommended cuts: Discretionary ₹${Math.round(json.cuts?.P3_discretionary?.reduce((a,c)=>a+c.amount, 0) || 0)} / Needed ₹${Math.round(json.cuts?.P2_needed?.reduce((a,c)=>a+c.amount, 0) || 0)}.`;
+  if (banner) {
+    if (json.triggered) {
+      banner.style.display = 'flex';
+      document.getElementById('dip-banner-title').textContent = `Income Dip Detected: Shortfall of ${formatINR(json.shortfall)}`;
+      document.getElementById('dip-banner-desc').textContent =
+        `Month-to-date inflow is ${formatINR(json.actual_mtd_inflow)}, falling below baseline target. Review recommended priority cuts below.`;
 
-    // Trigger auto message in copilot chat once per switch
-    if (!dipAutoMessageSent) {
-      dipAutoMessageSent = true;
-      sendCopilotMessage('Income dip detected. What cuts do you recommend?');
+      if (!dipAutoMessageSent) {
+        dipAutoMessageSent = true;
+        sendCopilotMessage('Income dip detected. What cuts do you recommend?');
+      }
+    } else {
+      banner.style.display = 'none';
     }
-  } else {
-    banner.style.display = 'none';
   }
 }
 
@@ -1305,83 +1360,119 @@ function setupGoalsTab() {
   const form = document.getElementById('goal-planner-form');
   const chatForm = document.getElementById('goals-chat-form');
 
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const item = document.getElementById('goal-item-name').value.trim();
-    const target_amount = parseFloat(document.getElementById('goal-target-amount').value);
-    const horizon_months = parseInt(document.getElementById('goal-horizon-months').value);
-    const priority = document.getElementById('goal-priority').value;
+  if (form) {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const name = document.getElementById('goal-item-name').value.trim();
+      const cost = parseFloat(document.getElementById('goal-target-cost').value);
+      const months = parseInt(document.getElementById('goal-timeline-months').value);
+      const current_savings = parseFloat(document.getElementById('goal-current-savings').value) || 0;
+      const annual_return_val = document.getElementById('goal-annual-return').value;
+      const annual_return = annual_return_val ? parseFloat(annual_return_val) : null;
 
-    const res = await authFetch('/api/goals/plan', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ item, target_amount, horizon_months, priority })
+      const res = await authFetch('/api/goals/plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, cost, months, current_savings, annual_return })
+      });
+
+      if (res && res.ok) {
+        const json = await res.json();
+        displayGoalPlan(json.plan);
+      } else {
+        alert('Failed to generate goal roadmap.');
+      }
     });
+  }
 
-    if (res && res.ok) {
-      const json = await res.json();
-      displayGoalPlan(json.plan);
-    }
-  });
+  if (chatForm) {
+    chatForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const input = document.getElementById('goals-chat-input');
+      const msg = input.value.trim();
+      if (!msg) return;
+      input.value = '';
+      sendGoalsChatMessage(msg);
+    });
+  }
 
-  chatForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const input = document.getElementById('goals-chat-input');
-    const msg = input.value.trim();
-    if (!msg) return;
-    input.value = '';
-    sendGoalsChatMessage(msg);
+  // Goal chat chips
+  const goalChips = document.querySelectorAll('#goals-chat-chips .chip-btn');
+  goalChips.forEach(chip => {
+    chip.addEventListener('click', () => {
+      const q = chip.getAttribute('data-query');
+      document.getElementById('goals-chat-input').value = q;
+      sendGoalsChatMessage(q);
+    });
   });
 }
 
 function displayGoalPlan(plan) {
-  const area = document.getElementById('goal-result-area');
+  const area = document.getElementById('goal-roadmap-output');
+  if (!area) return;
   area.style.display = 'block';
 
-  document.getElementById('plan-monthly-sip').textContent = formatINR(plan.monthly_sip);
-  document.getElementById('plan-target-amt').textContent = formatINR(plan.target_amount);
-  document.getElementById('plan-vehicle-name').textContent = plan.recommended_vehicle.name;
-  document.getElementById('plan-vehicle-rate').textContent = `${plan.recommended_vehicle.expected_return_pct}% p.a. expected`;
+  document.getElementById('goal-stat-monthly').textContent = formatINR(plan.required_monthly_saving);
+  document.getElementById('goal-stat-vehicle').textContent = plan.recommended_instrument || 'SIP';
+  document.getElementById('goal-stat-sip').textContent = formatINR(plan.sip_amount);
 
-  const banner = document.getElementById('plan-feasibility-banner');
-  const feas = plan.feasibility;
-  if (feas.is_feasible) {
-    banner.className = 'goal-feasibility-banner feasible';
-    banner.textContent = `Feasible! Your monthly surplus of ${formatINR(feas.monthly_surplus)} covers the required ${formatINR(plan.monthly_sip)}/mo.`;
+  const banner = document.getElementById('goal-feasibility-box');
+  const title = document.getElementById('goal-feasibility-title');
+  const desc = document.getElementById('goal-feasibility-desc');
+
+  title.textContent = (plan.feasibility || 'Feasible').toUpperCase() + ' GOAL';
+  desc.textContent = plan.feasibility_description || '';
+
+  if (plan.feasibility === 'feasible') {
+    banner.style.borderLeftColor = '#16A34A';
+    banner.style.background = '#F0FDF4';
+  } else if (plan.feasibility === 'stretch') {
+    banner.style.borderLeftColor = '#D97706';
+    banner.style.background = '#FFFBEB';
   } else {
-    banner.className = 'goal-feasibility-banner not-feasible';
-    banner.textContent = `Shortfall of ${formatINR(feas.shortfall)}/mo. Review suggested budget cuts below.`;
+    banner.style.borderLeftColor = '#DC2626';
+    banner.style.background = '#FEF2F2';
   }
 
-  // Budget cuts table
-  const tbody = document.querySelector('#goal-cuts-table tbody');
-  if (plan.budget_cuts && plan.budget_cuts.length > 0) {
-    tbody.innerHTML = plan.budget_cuts.map(c => `
+  // Budget cuts list
+  const cutsContainer = document.getElementById('goal-budget-cuts-list');
+  const cuts = plan.budgeting_steps || [];
+  if (cutsContainer) {
+    if (cuts.length === 0) {
+      cutsContainer.innerHTML = '<p class="text-sm text-muted">No budget cuts needed! Current monthly cashflow surplus covers this goal.</p>';
+    } else {
+      cutsContainer.innerHTML = cuts.map(c => `
+        <div class="budget-cut-card" style="padding: 0.6rem; margin-bottom: 0.5rem; background: #F9FAFB; border: 1px solid var(--border); border-radius: 6px;">
+          <div class="flex-between">
+            <strong>${escapeHtml(c.category)}</strong>
+            <span class="text-emerald font-bold">Save ${formatINR(c.suggested_cut)}/mo</span>
+          </div>
+          <div class="text-sm text-muted" style="margin-top: 2px;">${escapeHtml(c.action)}</div>
+        </div>
+      `).join('');
+    }
+  }
+
+  // Milestones table
+  const schedBody = document.querySelector('#goal-milestones-table tbody');
+  if (schedBody && plan.milestones) {
+    schedBody.innerHTML = plan.milestones.map(s => `
       <tr>
-        <td><strong>${escapeHtml(c.category)}</strong></td>
-        <td>${formatINR(c.current_spend)}</td>
-        <td class="text-emerald font-bold">-${formatINR(c.recommended_cut)}</td>
-        <td>${formatINR(c.target_spend)}</td>
+        <td>Month ${s.month}</td>
+        <td>${formatINR(s.monthly_deposit)}</td>
+        <td class="text-emerald font-bold">${formatINR(s.projected_returns)}</td>
+        <td><strong>${formatINR(s.target_balance)}</strong></td>
       </tr>
     `).join('');
-  } else {
-    tbody.innerHTML = `<tr><td colspan="4" class="text-center text-muted">No budget cuts needed! Current cashflow surplus is sufficient.</td></tr>`;
   }
-
-  // Monthly Milestone schedule
-  const schedBody = document.querySelector('#goal-schedule-table tbody');
-  schedBody.innerHTML = plan.monthly_schedule.map(s => `
-    <tr>
-      <td>Month ${s.month}</td>
-      <td>${formatINR(s.invested_cumulative)}</td>
-      <td class="text-emerald font-bold">${formatINR(s.projected_value)}</td>
-    </tr>
-  `).join('');
 }
 
 async function sendGoalsChatMessage(text) {
   appendChatMessage('goals', 'user', text);
   goalsChatHistory.push({ role: 'user', content: text });
+
+  const indicator = document.getElementById('goals-typing-indicator');
+  if (indicator) indicator.style.display = 'flex';
 
   try {
     const res = await authFetch('/api/chat', {
@@ -1389,12 +1480,14 @@ async function sendGoalsChatMessage(text) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message: text, history: goalsChatHistory })
     });
+    if (indicator) indicator.style.display = 'none';
     if (!res) return;
     const data = await res.json();
     goalsChatHistory.push({ role: 'assistant', content: data.reply });
     appendChatMessage('goals', 'bot', data.reply);
   } catch (err) {
-    appendChatMessage('goals', 'bot', 'Unable to reach assistant.');
+    if (indicator) indicator.style.display = 'none';
+    appendChatMessage('goals', 'bot', 'Unable to reach financial advisor.');
   }
 }
 
@@ -1408,42 +1501,45 @@ function setupCopilotChat() {
   const closeBtn = document.getElementById('chat-close-btn');
   const form = document.getElementById('chat-form');
   const input = document.getElementById('chat-input');
-  const openIcon = triggerBtn.querySelector('.chat-icon-open');
-  const closeIcon = triggerBtn.querySelector('.chat-icon-close');
+  const openIcon = triggerBtn ? triggerBtn.querySelector('.chat-icon-open') : null;
+  const closeIcon = triggerBtn ? triggerBtn.querySelector('.chat-icon-close') : null;
   const chips = document.querySelectorAll('#chat-chips .chip-btn');
 
   function toggle(show) {
+    if (!chatWindow) return;
     const isVis = show !== undefined ? show : (chatWindow.style.display !== 'none');
     if (isVis) {
       chatWindow.style.display = 'none';
-      openIcon.style.display = 'block';
-      closeIcon.style.display = 'none';
+      if (openIcon) openIcon.style.display = 'block';
+      if (closeIcon) closeIcon.style.display = 'none';
     } else {
       chatWindow.style.display = 'flex';
-      openIcon.style.display = 'none';
-      closeIcon.style.display = 'block';
-      input.focus();
+      if (openIcon) openIcon.style.display = 'none';
+      if (closeIcon) closeIcon.style.display = 'block';
+      if (input) input.focus();
     }
   }
 
-  triggerBtn.addEventListener('click', () => toggle());
-  closeBtn.addEventListener('click', () => toggle(true));
+  if (triggerBtn) triggerBtn.addEventListener('click', () => toggle());
+  if (closeBtn) closeBtn.addEventListener('click', () => toggle(true));
 
   chips.forEach(c => {
     c.addEventListener('click', () => {
       const q = c.getAttribute('data-query');
-      input.value = q;
+      if (input) input.value = q;
       sendCopilotMessage(q);
     });
   });
 
-  form.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const msg = input.value.trim();
-    if (!msg) return;
-    sendCopilotMessage(msg);
-    input.value = '';
-  });
+  if (form) {
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const msg = input.value.trim();
+      if (!msg) return;
+      sendCopilotMessage(msg);
+      input.value = '';
+    });
+  }
 }
 
 async function sendCopilotMessage(text) {

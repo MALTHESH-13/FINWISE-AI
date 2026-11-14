@@ -195,6 +195,16 @@ async def upload_statement(file: UploadFile = File(...), user: dict = Depends(ge
         raise HTTPException(status_code=400, detail=res.get("message", "Failed to parse CSV statement"))
     return {"status": "ok", **res}
 
+# --- Statement Delete / Reset Endpoint ---
+@app.delete("/api/statement")
+@app.delete("/api/upload")
+def delete_statement_route(user: dict = Depends(get_current_user)):
+    persona = get_active_persona(user["id"])
+    csv_path = get_transactions_path(user["id"], persona)
+    if os.path.exists(csv_path):
+        os.remove(csv_path)
+    return {"status": "ok", "message": "Statement deleted successfully"}
+
 # --- Calendar Endpoint ---
 @app.get("/api/calendar")
 def get_calendar_route(month: Optional[str] = None, user: dict = Depends(get_current_user)):
