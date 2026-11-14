@@ -339,6 +339,21 @@
           <canvas id="forecast-chart-canvas"></canvas>
         </div>
       </div>
+
+      <!-- Gemini AI Strategic Insights Card -->
+      <div class="card ai-insights-card" id="ai-insights-section">
+        <div class="card-header flex-between">
+          <div class="flex-align-center gap-sm">
+            <span class="ai-sparkle-badge">✨ Powered by Google Gemini</span>
+            <h3 style="margin-left: 0.5rem; display: inline-block;">Strategic Cashflow Audit</h3>
+          </div>
+          <button type="button" class="btn btn-sm btn-outline" id="btn-refresh-ai-insights">🔄 Analyze with Gemini</button>
+        </div>
+        <div id="ai-insights-empty" class="panel-empty-state">
+          <p>Upload a bank statement to see this</p>
+        </div>
+        <div id="ai-insights-content" class="ai-insights-grid" style="display: none;"></div>
+      </div>
     </section>
 
     <!-- TAB 2: INVESTMENTS & GOALS (#/goals) -->
@@ -432,7 +447,7 @@
               <div class="chat-status-dot"></div>
               <strong>CashPilot Financial Advisor</strong>
             </div>
-            <span class="badge badge-info">Rule-Based Advisor</span>
+            <span class="badge badge-info" id="goals-advisor-badge">✨ Gemini AI Advisor</span>
           </div>
 
           <div class="chat-chips-container" id="goals-chat-chips">
@@ -730,7 +745,7 @@
           <div class="chat-status-dot"></div>
           <div>
             <strong>CashPilot Copilot</strong>
-            <span class="chat-header-badge">Rule-Based Assistant</span>
+            <span class="chat-header-badge" id="chat-badge">✨ Gemini AI Copilot</span>
           </div>
         </div>
         <button class="chat-close-btn" id="chat-close-btn">&times;</button>

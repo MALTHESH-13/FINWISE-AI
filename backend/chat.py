@@ -12,6 +12,12 @@ from backend.persona import (
     load_user_transactions_persona,
     get_mom_comparison
 )
+from backend.gemini_service import (
+    is_gemini_configured,
+    generate_gemini_chat_reply,
+    call_gemini,
+    build_user_financial_context
+)
 
 def parse_amount(text: str) -> Optional[float]:
     t = text.lower()
@@ -106,13 +112,10 @@ def parse_goal_intent(text: str) -> Optional[Dict[str, Any]]:
     goal_keywords = ["want a", "want to buy", "save for", "saving for", "target", "invest for", "buying a", "plan for", "goal"]
     has_goal_kw = any(k in t for k in goal_keywords)
     
-    # Or matches pattern like: "<item> <cost> in <months> months"
     cost = parse_amount(text)
     months = parse_months_timeline(text)
 
     if has_goal_kw or (cost is not None and months is not None):
-        # Extract item name
-        # Strip numbers, months, amounts, common prefixes
         cleaned_text = re.sub(r'([0-9]+(?:\.[0-9]+)?)\s*(?:lakh|lakhs|lac|lacs|k)\b', '', t)
         cleaned_text = re.sub(r'(?:[₹]|rs\.?|inr)?\s*([0-9]{1,3}(?:,[0-9]{3})+|[0-9]{3,8})', '', cleaned_text)
         cleaned_text = re.sub(r'in\s+[0-9]+\s*(?:months?|years?|mo|yrs?)', '', cleaned_text)
@@ -195,90 +198,32 @@ def handle_chat_message(user_id: int, message: str, history: Optional[List[Dict[
             f"(SIP deposit of ₹{int(plan['sip_amount']):,}/mo; {plan['disclaimer']}). "
             f"A complete month-by-month milestone table is generated in your Investments & Goals tab."
         )
+
+        # Optional Gemini enhancement
+        if is_gemini_configured():
+            try:
+                gemini_tip = call_gemini(
+                    f"User goal: {item_name} for ₹{int(cost):,} in {months} months. "
+                    f"Required monthly saving: ₹{int(plan['required_monthly_saving']):,}. "
+                    f"Feasibility: {plan['feasibility']}. "
+                    f"Give 1 actionable tip on how to achieve this without lifestyle pain in 2 sentences.",
+                    max_tokens=150,
+                    timeout_seconds=4.0
+                )
+                if gemini_tip:
+                    reply += f"\n\n✨ Gemini AI Tip: {gemini_tip}"
+            except Exception:
+                pass
+
         return {
             "reply": reply,
             "goal_plan": plan,
             "simulation": None,
-            "intent": "goal_plan"
+            "intent": "goal_plan",
+            "ai_powered": is_gemini_configured()
         }
 
-    # 2. Financial Advisory Questions
-    if any(q in t for q in ["how much can i invest", "how much should i invest", "investable surplus"]):
-        prof = get_profile_data(user_id, persona)
-        baseline = prof["baseline_income"]
-        mom = get_mom_comparison(user_id, persona)
-        total_curr = sum(mom.get("current_month_spending", []))
-        surplus = max(0.0, baseline - total_curr)
-        safe_invest = round(surplus * 0.70, 2)
-        return {
-            "reply": (
-                f"Based on your baseline monthly income of ₹{int(baseline):,} and recent monthly spending of ₹{int(total_curr):,}, "
-                f"your estimated investable surplus is ₹{int(surplus):,}/month. "
-                f"We recommend allocating 70% (₹{int(safe_invest):,}/mo) into recommended SIPs and retaining 30% (₹{int(surplus - safe_invest):,}/mo) as an emergency liquid buffer."
-            ),
-            "simulation": None,
-            "intent": "advisory_invest"
-        }
-
-    if any(q in t for q in ["am i saving enough", "savings rate", "is my savings good"]):
-        prof = get_profile_data(user_id, persona)
-        baseline = prof["baseline_income"]
-        mom = get_mom_comparison(user_id, persona)
-        total_curr = sum(mom.get("current_month_spending", []))
-        surplus = max(0.0, baseline - total_curr)
-        rate = round((surplus / baseline) * 100.0, 1) if baseline > 0 else 0.0
-        verdict = "healthy and above the recommended 20% benchmark" if rate >= 20.0 else "below the 20% benchmark; consider trimming discretionary categories"
-        return {
-            "reply": (
-                f"Your current monthly savings rate is {rate}% (₹{int(surplus):,} saved from a baseline income of ₹{int(baseline):,}). "
-                f"This is {verdict}."
-            ),
-            "simulation": None,
-            "intent": "advisory_savings_rate"
-        }
-
-    if any(q in t for q in ["tips to grow my business", "grow my business", "business tips", "increase revenue"]):
-        if persona != "business":
-            return {
-                "reply": "Business growth tips are available in the Small Business persona. You can switch to Small Business in the header switcher anytime.",
-                "simulation": None,
-                "intent": "business_tips"
-            }
-        txs = load_user_transactions_persona(user_id, "business")
-        credits = [t for t in txs if t["type"] == "credit"]
-        return {
-            "reply": (
-                "Here are 3 data-driven recommendations for your business: "
-                "1. Revenue Pattern: Your historical records show October was your peak revenue month (₹1,70,000), driven by large client retainers. "
-                "2. Cashflow Smoothing: November current inflow is ₹35,000; offer 5% early-payment discounts on invoices to avoid 45-day payment lulls. "
-                "3. Overhead Protection: Keep your 15% safety buffer active to guarantee covering P1 essentials (Office Rent and Loan EMIs) during low-inflow cycles."
-            ),
-            "simulation": None,
-            "intent": "business_tips"
-        }
-
-    # 3. General Cashflow Queries
-    if any(q in t for q in ["will i run out of money", "run out of cash", "go broke", "run out"]):
-        forecast = get_forecast(user_id, persona)
-        reply = explain_general_query("run_out", forecast)
-        return {"reply": reply, "simulation": None, "intent": "run_out"}
-
-    if any(q in t for q in ["safe to spend", "how much can i spend", "is it safe to spend"]):
-        forecast = get_forecast(user_id, persona)
-        reply = explain_general_query("safe_to_spend", forecast)
-        return {"reply": reply, "simulation": None, "intent": "safe_to_spend"}
-
-    if any(q in t for q in ["biggest risk", "what's my biggest risk", "whats my biggest risk"]):
-        forecast = get_forecast(user_id, persona)
-        reply = explain_general_query("biggest_risk", forecast)
-        return {"reply": reply, "simulation": None, "intent": "biggest_risk"}
-
-    if any(q in t for q in ["which bills are coming", "bills coming", "upcoming bills", "bills due"]):
-        forecast = get_forecast(user_id, persona)
-        reply = explain_general_query("bills_coming", forecast)
-        return {"reply": reply, "simulation": None, "intent": "bills_coming"}
-
-    # 4. What-If Scenarios
+    # 2. What-If Scenarios
     scenario_type = None
     if any(k in t for k in ["prepay", "foreclose", "pay off loan", "prepayment"]):
         scenario_type = "prepay_loan"
@@ -323,14 +268,126 @@ def handle_chat_message(user_id: int, message: str, history: Optional[List[Dict[
         sim_result = simulate_scenario(user_id, scenario, persona)
         reply = explain_simulation(sim_result, scenario)
 
+        # Optional Gemini enhancement
+        if is_gemini_configured():
+            try:
+                min_before = int(sim_result.get("min_balance_before", 0))
+                min_after = int(sim_result.get("min_balance_after", 0))
+                prob_before = round(sim_result.get("prob_before", 0) * 100, 1)
+                prob_after = round(sim_result.get("prob_after", 0) * 100, 1)
+                gemini_insight = call_gemini(
+                    f"What-if scenario: {scenario_type} of ₹{int(amount):,} on {date_str}. "
+                    f"Min balance shifts from ₹{min_before:,} to ₹{min_after:,}. "
+                    f"Shortage risk changes from {prob_before}% to {prob_after}%. "
+                    f"Summarize the practical takeaway for the user in 2 sentences.",
+                    max_tokens=150,
+                    timeout_seconds=4.0
+                )
+                if gemini_insight:
+                    reply += f"\n\n✨ Gemini AI Takeaway: {gemini_insight}"
+            except Exception:
+                pass
+
         return {
             "reply": reply,
             "simulation": {
                 **sim_result,
                 "scenario": scenario
             },
-            "intent": scenario_type
+            "intent": scenario_type,
+            "ai_powered": is_gemini_configured()
         }
+
+    # 3. Check with Google Gemini for Advisory or Free-Text Inquiries
+    if is_gemini_configured():
+        try:
+            gemini_advice = generate_gemini_chat_reply(user_id, message, history)
+            if gemini_advice and len(gemini_advice.strip()) > 15:
+                return {
+                    "reply": gemini_advice,
+                    "simulation": None,
+                    "intent": "gemini_advisory",
+                    "ai_powered": True
+                }
+        except Exception:
+            pass
+
+    # 4. Fallback Rule-Based Financial Advisory
+    if any(q in t for q in ["how much can i invest", "how much should i invest", "investable surplus"]):
+        prof = get_profile_data(user_id, persona)
+        baseline = prof["baseline_income"]
+        mom = get_mom_comparison(user_id, persona)
+        total_curr = sum(mom.get("current_month_spending", []))
+        surplus = max(0.0, baseline - total_curr)
+        safe_invest = round(surplus * 0.70, 2)
+        return {
+            "reply": (
+                f"Based on your baseline monthly income of ₹{int(baseline):,} and recent monthly spending of ₹{int(total_curr):,}, "
+                f"your estimated investable surplus is ₹{int(surplus):,}/month. "
+                f"We recommend allocating 70% (₹{int(safe_invest):,}/mo) into recommended SIPs and retaining 30% (₹{int(surplus - safe_invest):,}/mo) as an emergency liquid buffer."
+            ),
+            "simulation": None,
+            "intent": "advisory_invest",
+            "ai_powered": False
+        }
+
+    if any(q in t for q in ["am i saving enough", "savings rate", "is my savings good"]):
+        prof = get_profile_data(user_id, persona)
+        baseline = prof["baseline_income"]
+        mom = get_mom_comparison(user_id, persona)
+        total_curr = sum(mom.get("current_month_spending", []))
+        surplus = max(0.0, baseline - total_curr)
+        rate = round((surplus / baseline) * 100.0, 1) if baseline > 0 else 0.0
+        verdict = "healthy and above the recommended 20% benchmark" if rate >= 20.0 else "below the 20% benchmark; consider trimming discretionary categories"
+        return {
+            "reply": (
+                f"Your current monthly savings rate is {rate}% (₹{int(surplus):,} saved from a baseline income of ₹{int(baseline):,}). "
+                f"This is {verdict}."
+            ),
+            "simulation": None,
+            "intent": "advisory_savings_rate",
+            "ai_powered": False
+        }
+
+    if any(q in t for q in ["tips to grow my business", "grow my business", "business tips", "increase revenue"]):
+        if persona != "business":
+            return {
+                "reply": "Business growth tips are available in the Small Business persona. You can switch to Small Business in the header switcher anytime.",
+                "simulation": None,
+                "intent": "business_tips",
+                "ai_powered": False
+            }
+        return {
+            "reply": (
+                "Here are 3 data-driven recommendations for your business: "
+                "1. Revenue Pattern: Your historical records show October was your peak revenue month (₹1,70,000), driven by large client retainers. "
+                "2. Cashflow Smoothing: November current inflow is ₹35,000; offer 5% early-payment discounts on invoices to avoid 45-day payment lulls. "
+                "3. Overhead Protection: Keep your 15% safety buffer active to guarantee covering P1 essentials (Office Rent and Loan EMIs) during low-inflow cycles."
+            ),
+            "simulation": None,
+            "intent": "business_tips",
+            "ai_powered": False
+        }
+
+    if any(q in t for q in ["will i run out of money", "run out of cash", "go broke", "run out"]):
+        forecast = get_forecast(user_id, persona)
+        reply = explain_general_query("run_out", forecast)
+        return {"reply": reply, "simulation": None, "intent": "run_out", "ai_powered": False}
+
+    if any(q in t for q in ["safe to spend", "how much can i spend", "is it safe to spend"]):
+        forecast = get_forecast(user_id, persona)
+        reply = explain_general_query("safe_to_spend", forecast)
+        return {"reply": reply, "simulation": None, "intent": "safe_to_spend", "ai_powered": False}
+
+    if any(q in t for q in ["biggest risk", "what's my biggest risk", "whats my biggest risk"]):
+        forecast = get_forecast(user_id, persona)
+        reply = explain_general_query("biggest_risk", forecast)
+        return {"reply": reply, "simulation": None, "intent": "biggest_risk", "ai_powered": False}
+
+    if any(q in t for q in ["which bills are coming", "bills coming", "upcoming bills", "bills due"]):
+        forecast = get_forecast(user_id, persona)
+        reply = explain_general_query("bills_coming", forecast)
+        return {"reply": reply, "simulation": None, "intent": "bills_coming", "ai_powered": False}
 
     return {
         "reply": (
@@ -339,5 +396,6 @@ def handle_chat_message(user_id: int, message: str, history: Optional[List[Dict[
             "or \"tips to grow my business\"."
         ),
         "simulation": None,
-        "intent": "clarification_needed"
+        "intent": "clarification_needed",
+        "ai_powered": False
     }

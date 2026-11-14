@@ -256,6 +256,29 @@ def backtest_route(user: dict = Depends(get_current_user)):
     bt = get_backtest_accuracy(user["id"], persona)
     return {"status": "ok", "backtest": bt}
 
+# --- Gemini AI Status & Insights ---
+@app.get("/api/ai/status")
+def ai_status_route(user: dict = Depends(get_current_user)):
+    from backend.gemini_service import is_gemini_configured, GEMINI_MODELS
+    return {
+        "status": "ok",
+        "enabled": is_gemini_configured(),
+        "provider": "Google Gemini",
+        "model": GEMINI_MODELS[0] if is_gemini_configured() else None
+    }
+
+@app.get("/api/ai/insights")
+def ai_insights_route(user: dict = Depends(get_current_user)):
+    from backend.gemini_service import generate_gemini_smart_insights, is_gemini_configured
+    if not is_gemini_configured():
+        return {"status": "ok", "insights": [], "message": "Gemini not configured"}
+    insights = generate_gemini_smart_insights(user["id"])
+    return {
+        "status": "ok",
+        "insights": insights or [],
+        "ai_powered": True
+    }
+
 # --- Transactions, Forecast, Simulator, Chat ---
 @app.get("/api/transactions")
 def get_transactions(user: dict = Depends(get_current_user)):

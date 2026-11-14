@@ -429,7 +429,8 @@ async function refreshAllDashboardPanels() {
     loadTransactions(),
     loadBudgetLimits(),
     loadAccuracyAndAnomalies(),
-    checkBusinessDip()
+    checkBusinessDip(),
+    loadAIInsights()
   ]);
 }
 
@@ -1233,7 +1234,56 @@ function appendChatMessage(target, sender, text) {
 
   const div = document.createElement('div');
   div.className = `chat-msg ${sender}-msg`;
-  div.innerHTML = `<div class="msg-bubble">${escapeHtml(text).replace(/\n/g, '<br>')}</div>`;
+  let formatted = escapeHtml(text)
+    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n/g, '<br>');
+  div.innerHTML = `<div class="msg-bubble">${formatted}</div>`;
   container.appendChild(div);
   container.scrollTop = container.scrollHeight;
 }
+
+// Google Gemini Strategic Insights
+async function loadAIInsights() {
+  const emptyEl = document.getElementById('ai-insights-empty');
+  const contentEl = document.getElementById('ai-insights-content');
+  if (!emptyEl || !contentEl) return;
+
+  try {
+    const res = await authFetch('/api/ai/insights');
+    if (!res) return;
+    const data = await res.json();
+    if (!data.insights || data.insights.length === 0) {
+      emptyEl.style.display = 'block';
+      contentEl.style.display = 'none';
+      return;
+    }
+
+    emptyEl.style.display = 'none';
+    contentEl.style.display = 'grid';
+    contentEl.innerHTML = data.insights.map(item => `
+      <div class="ai-insight-card">
+        <div class="ai-insight-header">
+          <span class="ai-insight-title">${escapeHtml(item.title)}</span>
+          <span class="ai-insight-tag ${(item.tag || 'safe').toLowerCase()}">${escapeHtml(item.tag || 'Tip')}</span>
+        </div>
+        <p class="ai-insight-desc">${escapeHtml(item.description)}</p>
+      </div>
+    `).join('');
+  } catch (err) {
+    console.error('Failed to load AI insights:', err);
+  }
+}
+
+// Setup AI insights refresh button listener
+document.addEventListener('DOMContentLoaded', () => {
+  const btnRefreshAI = document.getElementById('btn-refresh-ai-insights');
+  if (btnRefreshAI) {
+    btnRefreshAI.addEventListener('click', async () => {
+      btnRefreshAI.disabled = true;
+      btnRefreshAI.textContent = '⏳ Analyzing...';
+      await loadAIInsights();
+      btnRefreshAI.disabled = false;
+      btnRefreshAI.textContent = '🔄 Analyze with Gemini';
+    });
+  }
+});

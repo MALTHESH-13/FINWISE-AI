@@ -9,8 +9,10 @@ venv/
 ENV/
 .venv/
 
-# CashPilot runtime data & secrets
+# Environment and keys
+.env
 data/.secret
+data/.gemini_key
 data/app.db
 data/users/
 
