@@ -5,8 +5,7 @@ import calendar
 from datetime import datetime, date, timedelta
 from typing import List, Dict, Any, Optional
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(BASE_DIR, "data")
+from backend.config import BASE_DIR, DATA_DIR, get_data_dir
 
 def get_user_csv_path(user_id: int, persona: Optional[str] = None) -> str:
     try:
@@ -15,10 +14,11 @@ def get_user_csv_path(user_id: int, persona: Optional[str] = None) -> str:
             persona = get_active_persona(user_id)
     except Exception:
         persona = "salaried"
-    persona_path = os.path.join(DATA_DIR, "users", str(user_id), persona, "transactions.csv")
+    data_dir = get_data_dir()
+    persona_path = os.path.join(data_dir, "users", str(user_id), persona, "transactions.csv")
     if os.path.exists(persona_path):
         return persona_path
-    legacy_path = os.path.join(DATA_DIR, "users", str(user_id), "transactions.csv")
+    legacy_path = os.path.join(data_dir, "users", str(user_id), "transactions.csv")
     if os.path.exists(legacy_path):
         return legacy_path
     os.makedirs(os.path.dirname(persona_path), exist_ok=True)

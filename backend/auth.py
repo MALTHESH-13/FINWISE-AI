@@ -10,12 +10,13 @@ from typing import Optional, Dict
 from fastapi import Request, Response, HTTPException, status, Depends
 from pydantic import BaseModel
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-DB_PATH = os.path.join(DATA_DIR, "app.db")
-SECRET_PATH = os.path.join(DATA_DIR, ".secret")
+from backend.config import BASE_DIR, DATA_DIR, get_data_dir
+
 COOKIE_NAME = "cashpilot_session"
 SESSION_DURATION_SEC = 24 * 3600  # 24h
+
+def get_db_path() -> str:
+    return os.path.join(get_data_dir(), "app.db")
 
 # In-memory rate limiter: {email: [timestamp, ...]}
 FAILED_ATTEMPTS: Dict[str, list] = {}
@@ -26,13 +27,21 @@ def get_secret_key() -> bytes:
     env_key = os.environ.get("SECRET_KEY")
     if env_key:
         return env_key.encode("utf-8")
-    os.makedirs(DATA_DIR, exist_ok=True)
-    if os.path.exists(SECRET_PATH):
-        with open(SECRET_PATH, "rb") as f:
-            return f.read().strip()
+    d_dir = get_data_dir()
+    os.makedirs(d_dir, exist_ok=True)
+    secret_path = os.path.join(d_dir, ".secret")
+    if os.path.exists(secret_path):
+        try:
+            with open(secret_path, "rb") as f:
+                return f.read().strip()
+        except Exception:
+            pass
     new_secret = secrets.token_bytes(32)
-    with open(SECRET_PATH, "wb") as f:
-        f.write(new_secret)
+    try:
+        with open(secret_path, "wb") as f:
+            f.write(new_secret)
+    except Exception:
+        pass
     return new_secret
 
 def hash_password(password: str) -> str:
@@ -76,8 +85,10 @@ def verify_session_token(token: str) -> Optional[int]:
         return None
 
 def init_db():
-    os.makedirs(DATA_DIR, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    d_dir = get_data_dir()
+    os.makedirs(d_dir, exist_ok=True)
+    db_file = get_db_path()
+    conn = sqlite3.connect(db_file)
     try:
         with conn:
             conn.execute("""
@@ -100,13 +111,13 @@ def init_db():
                     ("Demo User", "demo@cashpilot.app", pw_hash, datetime.utcnow().isoformat())
                 )
                 demo_id = cursor.lastrowid
-                demo_dir = os.path.join(DATA_DIR, "users", str(demo_id))
+                demo_dir = os.path.join(d_dir, "users", str(demo_id))
                 os.makedirs(demo_dir, exist_ok=True)
     finally:
         conn.close()
 
 def get_user_by_id(user_id: int) -> Optional[dict]:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(get_db_path())
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT id, name, email, created_at FROM users WHERE id = ?", (user_id,))
@@ -118,7 +129,7 @@ def get_user_by_id(user_id: int) -> Optional[dict]:
         conn.close()
 
 def get_user_by_email(email: str) -> Optional[dict]:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(get_db_path())
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT id, name, email, password_hash, created_at FROM users WHERE email = ?", (email,))
@@ -130,7 +141,7 @@ def get_user_by_email(email: str) -> Optional[dict]:
         conn.close()
 
 def create_user(name: str, email: str, password: str) -> dict:
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(get_db_path())
     try:
         with conn:
             cursor = conn.cursor()
@@ -141,7 +152,7 @@ def create_user(name: str, email: str, password: str) -> dict:
             )
             user_id = cursor.lastrowid
             # Create user data folder
-            user_dir = os.path.join(DATA_DIR, "users", str(user_id))
+            user_dir = os.path.join(get_data_dir(), "users", str(user_id))
             os.makedirs(user_dir, exist_ok=True)
             return {"id": user_id, "name": name, "email": email}
     finally:

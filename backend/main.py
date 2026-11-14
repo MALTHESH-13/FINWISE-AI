@@ -47,8 +47,7 @@ from backend.persona import (
     get_transactions_path
 )
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")
+from backend.config import BASE_DIR, FRONTEND_DIR, DATA_DIR, get_data_dir
 
 app = FastAPI(title="CashPilot")
 
@@ -416,11 +415,24 @@ def chat_route(data: ChatModel, user: dict = Depends(get_current_user)):
 # --- Static Frontend Serving ---
 @app.get("/login.html")
 def serve_login():
-    return FileResponse(os.path.join(FRONTEND_DIR, "login.html"))
+    path = os.path.join(FRONTEND_DIR, "login.html")
+    if os.path.exists(path):
+        return FileResponse(path)
+    cwd_path = os.path.join(os.getcwd(), "frontend", "login.html")
+    if os.path.exists(cwd_path):
+        return FileResponse(cwd_path)
+    return JSONResponse({"status": "error", "message": "login.html not found"}, status_code=404)
 
 @app.get("/")
 def serve_root():
-    return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
+    path = os.path.join(FRONTEND_DIR, "index.html")
+    if os.path.exists(path):
+        return FileResponse(path)
+    cwd_path = os.path.join(os.getcwd(), "frontend", "index.html")
+    if os.path.exists(cwd_path):
+        return FileResponse(cwd_path)
+    return JSONResponse({"status": "error", "message": "index.html not found"}, status_code=404)
 
-if os.path.exists(FRONTEND_DIR):
-    app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="static")
+frontend_target = FRONTEND_DIR if os.path.exists(FRONTEND_DIR) else os.path.join(os.getcwd(), "frontend")
+if os.path.exists(frontend_target):
+    app.mount("/", StaticFiles(directory=frontend_target, html=True), name="static")

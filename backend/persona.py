@@ -8,9 +8,7 @@ from typing import Dict, Any, List, Optional, Tuple
 
 from backend.categorizer import clean_description, categorize_transaction
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-USERS_DIR = os.path.join(DATA_DIR, "users")
+from backend.config import BASE_DIR, DATA_DIR, USERS_DIR, get_data_dir
 
 DEFAULT_LIMITS = {
     "Housing": 35000.0,
@@ -29,7 +27,7 @@ DEFAULT_LIMITS = {
 }
 
 def get_user_dir(user_id: int) -> str:
-    path = os.path.join(USERS_DIR, str(user_id))
+    path = os.path.join(get_data_dir(), "users", str(user_id))
     os.makedirs(path, exist_ok=True)
     return path
 
