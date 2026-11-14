@@ -370,29 +370,107 @@ def parse_and_ingest_csv(user_id: int, persona: str, file_contents: bytes) -> Di
         "warnings": warnings[:10]  # truncate warnings if many
     }
 
+def get_commitments_path(user_id: int, persona: Optional[str] = None) -> str:
+    return os.path.join(get_persona_dir(user_id, persona), "commitments.json")
+
+def load_custom_commitments(user_id: int, persona: Optional[str] = None) -> List[Dict[str, Any]]:
+    path = get_commitments_path(user_id, persona)
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+def save_custom_commitment(user_id: int, persona: str, commitment: Dict[str, Any]) -> List[Dict[str, Any]]:
+    path = get_commitments_path(user_id, persona)
+    items = load_custom_commitments(user_id, persona)
+    name_clean = commitment.get("name", "").strip().lower()
+    items = [it for it in items if it.get("name", "").strip().lower() != name_clean]
+    items.append({
+        "name": commitment.get("name", "").strip(),
+        "category": commitment.get("category", "Other"),
+        "amount": round(abs(float(commitment.get("amount", 0.0))), 2),
+        "day_of_month": max(1, min(28, int(commitment.get("day_of_month", 5))))
+    })
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(items, f, indent=2)
+    return items
+
+def delete_custom_commitment(user_id: int, persona: str, name: str) -> List[Dict[str, Any]]:
+    path = get_commitments_path(user_id, persona)
+    items = load_custom_commitments(user_id, persona)
+    name_clean = name.strip().lower()
+    items = [it for it in items if it.get("name", "").strip().lower() != name_clean]
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(items, f, indent=2)
+    return items
+
 def get_fixed_commitments(user_id: int, persona: Optional[str] = None) -> Dict[str, Any]:
     """
     Fixed Monthly Commitments: cards/table of detected recurring expenses
     with name, category, amount, next due date, days left, and monthly total.
     """
     records = load_user_transactions_persona(user_id, persona)
-    if not records:
+    custom_items = load_custom_commitments(user_id, persona)
+    if not records and not custom_items:
         return {"commitments": [], "monthly_total": 0.0, "has_data": False}
 
     anchor_date = datetime(2026, 11, 14)
-    # Target recurring categories
+    # Target recurring categories and keywords
     rec_cats = {"Housing", "Loan/EMI", "Utilities", "Subscriptions", "Phone/Data", "Insurance", "Health/Fitness"}
+    rec_keywords = (
+        "rent", "emi", "loan", "monthly", "subscription", "sub", "bill", "broadband", "wifi",
+        "internet", "insurance", "gym", "cult", "electricity", "power", "bescom", "water",
+        "maintenance", "cloud", "aws", "adobe", "google", "netflix", "spotify", "prime",
+        "recharge", "sip", "stipend", "allowance", "retainer"
+    )
 
     groups: Dict[str, List[Dict[str, Any]]] = {}
     for r in records:
-        if r["type"] == "debit" and r["category"] in rec_cats:
-            key = r["cleaned_merchant"]
-            groups.setdefault(key, []).append(r)
+        if r["type"] == "debit":
+            desc_lower = (r.get("cleaned_merchant", "") + " " + r.get("description", "")).lower()
+            is_rec_cat = r.get("category") in rec_cats
+            is_rec_kw = any(kw in desc_lower for kw in rec_keywords)
+            if is_rec_cat or is_rec_kw:
+                key = r.get("cleaned_merchant") or r.get("description")
+                groups.setdefault(key, []).append(r)
 
     commitments = []
     total_monthly = 0.0
+    seen_names = set()
 
+    # 1. Custom commitments added by user
+    for c in custom_items:
+        name = c["name"]
+        cat = c.get("category", "Other")
+        amt = float(c["amount"])
+        rep_day = int(c.get("day_of_month", 5))
+        y, m = anchor_date.year, anchor_date.month
+        try:
+            due_dt = datetime(y, m, rep_day)
+            if due_dt < anchor_date:
+                due_dt = datetime(y + 1, 1, rep_day) if m == 12 else datetime(y, m + 1, rep_day)
+        except ValueError:
+            due_dt = anchor_date + timedelta(days=10)
+        days_left = max(0, (due_dt - anchor_date).days)
+        commitments.append({
+            "name": name,
+            "category": cat,
+            "amount": round(amt, 2),
+            "day_of_month": rep_day,
+            "next_due_date": due_dt.strftime("%Y-%m-%d"),
+            "days_left": days_left,
+            "is_custom": True
+        })
+        total_monthly += amt
+        seen_names.add(name.strip().lower())
+
+    # 2. Automatically detected commitments from statement
     for name, items in groups.items():
+        if name.strip().lower() in seen_names:
+            continue
         avg_amt = sum(it["amount"] for it in items) / len(items)
         cat = items[-1]["category"]
         days = [int(it["date"].split("-")[2]) for it in items if len(it["date"].split("-")) == 3]
@@ -413,10 +491,13 @@ def get_fixed_commitments(user_id: int, persona: Optional[str] = None) -> Dict[s
             "name": name,
             "category": cat,
             "amount": round(avg_amt, 2),
+            "day_of_month": rep_day,
             "next_due_date": due_dt.strftime("%Y-%m-%d"),
-            "days_left": days_left
+            "days_left": days_left,
+            "is_custom": False
         })
         total_monthly += avg_amt
+        seen_names.add(name.strip().lower())
 
     commitments.sort(key=lambda x: x["days_left"])
     return {

@@ -129,6 +129,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Setup transactions view toggle
   setupTransactionsTab();
 
+  // Setup recurring commitments
+  setupRecurringTab();
+
   // Setup limits editor
   setupBudgetTab();
 
@@ -853,8 +856,28 @@ async function loadCommitments() {
   const recEmpty = document.getElementById('recurring-tab-empty');
   const recTable = document.getElementById('recurring-tab-table');
   const recTbody = recTable ? recTable.querySelector('tbody') : null;
+  const recKpiTotal = document.getElementById('rec-kpi-total');
+  const recKpiCount = document.getElementById('rec-kpi-count');
+  const recKpiNext = document.getElementById('rec-kpi-next');
+  const recKpiNextDesc = document.getElementById('rec-kpi-next-desc');
 
-  if (!json.has_data || !json.commitments || json.commitments.length === 0) {
+  const totalMonthly = json.monthly_total || json.total_monthly || 0;
+  const commList = json.commitments || [];
+
+  if (recKpiTotal) recKpiTotal.textContent = formatINR(totalMonthly);
+  if (recKpiCount) recKpiCount.textContent = commList.length.toString();
+
+  if (commList.length > 0) {
+    const sorted = [...commList].sort((a, b) => (a.days_left || 0) - (b.days_left || 0));
+    const nextBill = sorted[0];
+    if (recKpiNext) recKpiNext.textContent = nextBill.name;
+    if (recKpiNextDesc) recKpiNextDesc.textContent = `${formatINR(nextBill.amount)} (${nextBill.days_left} days left)`;
+  } else {
+    if (recKpiNext) recKpiNext.textContent = '-';
+    if (recKpiNextDesc) recKpiNextDesc.textContent = 'No upcoming commitments';
+  }
+
+  if (!json.has_data || commList.length === 0) {
     if (emptyEl) emptyEl.style.display = 'flex';
     if (tableEl) tableEl.style.display = 'none';
     if (recEmpty) recEmpty.style.display = 'flex';
@@ -868,9 +891,9 @@ async function loadCommitments() {
   if (recEmpty) recEmpty.style.display = 'none';
   if (recTable) recTable.style.display = 'table';
 
-  if (metricTotal) metricTotal.textContent = formatINR(json.monthly_total);
+  if (metricTotal) metricTotal.textContent = formatINR(totalMonthly);
 
-  const rowsHtml = json.commitments.map(c => `
+  const rowsHtml = commList.map(c => `
     <tr>
       <td><strong>${escapeHtml(c.name)}</strong></td>
       <td><span class="badge badge-info">${escapeHtml(c.category)}</span></td>
@@ -883,15 +906,33 @@ async function loadCommitments() {
   if (tbody) tbody.innerHTML = rowsHtml;
 
   if (recTbody) {
-    recTbody.innerHTML = json.commitments.map(c => `
+    recTbody.innerHTML = commList.map(c => `
       <tr>
         <td><strong>${escapeHtml(c.name)}</strong></td>
         <td><span class="badge badge-info">${escapeHtml(c.category)}</span></td>
         <td>${formatINR(c.amount)}</td>
         <td>Monthly</td>
         <td><strong>Day ${c.day_of_month || 5}</strong> (${c.days_left} days left)</td>
+        <td style="text-align: center;">
+          <button type="button" class="btn-icon-del btn-delete-commitment" data-name="${escapeHtml(c.name)}" title="Delete Commitment">
+            🗑️
+          </button>
+        </td>
       </tr>
     `).join('');
+
+    recTbody.querySelectorAll('.btn-delete-commitment').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const name = btn.getAttribute('data-name');
+        if (!confirm(`Delete recurring commitment "${name}"?`)) return;
+        const delRes = await authFetch(`/api/commitments/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        if (delRes && delRes.ok) {
+          await refreshAllDashboardPanels();
+        } else {
+          alert('Failed to delete commitment.');
+        }
+      });
+    });
   }
 }
 
@@ -1146,56 +1187,219 @@ function renderTransactionsTable() {
 }
 
 // ==========================================================================
+// RECURRING COMMITMENTS TAB
+// ==========================================================================
+
+function setupRecurringTab() {
+  const modal = document.getElementById('add-commitment-modal');
+  const btnOpen = document.getElementById('btn-open-add-commitment');
+  const btnClose = document.getElementById('btn-close-commitment-modal');
+  const form = document.getElementById('add-commitment-form');
+
+  if (btnOpen && modal) {
+    btnOpen.addEventListener('click', () => {
+      modal.style.display = 'flex';
+      const nameInput = document.getElementById('comm-name');
+      if (nameInput) nameInput.focus();
+    });
+  }
+
+  if (btnClose && modal) {
+    btnClose.addEventListener('click', () => {
+      modal.style.display = 'none';
+    });
+  }
+
+  if (modal) {
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) modal.style.display = 'none';
+    });
+  }
+
+  if (form) {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const name = document.getElementById('comm-name').value.trim();
+      const category = document.getElementById('comm-category').value;
+      const amount = parseFloat(document.getElementById('comm-amount').value) || 0;
+      const day_of_month = parseInt(document.getElementById('comm-day').value) || 5;
+
+      if (!name || amount <= 0) {
+        alert('Please enter a valid commitment name and amount.');
+        return;
+      }
+
+      const res = await authFetch('/api/commitments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, category, amount, day_of_month })
+      });
+
+      if (res && res.ok) {
+        modal.style.display = 'none';
+        form.reset();
+        await refreshAllDashboardPanels();
+      } else {
+        alert('Failed to save commitment.');
+      }
+    });
+  }
+}
+
+// ==========================================================================
 // BUDGET & LIMITS TAB
 // ==========================================================================
 
 function setupBudgetTab() {
   const btnSave = document.getElementById('btn-save-limits');
-  if (!btnSave) return;
+  const btnRecalc = document.getElementById('btn-recalc-limits');
 
-  btnSave.addEventListener('click', async (e) => {
-    e.preventDefault();
-    const inputs = document.querySelectorAll('#limits-editor-container input');
-    const limits = {};
-    inputs.forEach(inp => {
-      const cat = inp.getAttribute('data-cat');
-      const val = parseFloat(inp.value) || 0;
-      limits[cat] = val;
+  if (btnSave) {
+    btnSave.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const inputs = document.querySelectorAll('#limits-editor-container input');
+      const limits = {};
+      inputs.forEach(inp => {
+        const cat = inp.getAttribute('data-cat');
+        const val = parseFloat(inp.value) || 0;
+        limits[cat] = val;
+      });
+
+      const res = await authFetch('/api/limits', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ limits })
+      });
+
+      if (res && res.ok) {
+        await refreshAllDashboardPanels();
+        alert('Budget limits saved successfully.');
+      } else {
+        alert('Failed to save budget limits.');
+      }
     });
+  }
 
-    const res = await authFetch('/api/limits', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ limits })
+  if (btnRecalc) {
+    btnRecalc.addEventListener('click', async (e) => {
+      e.preventDefault();
+      const res = await authFetch('/api/mom');
+      if (!res) return;
+      const json = await res.json();
+      if (!json.categories || json.categories.length === 0) {
+        alert('No statement data available to auto-calculate limits. Please upload a statement first.');
+        return;
+      }
+      const fixedCats = new Set(["Housing", "Loan/EMI", "Utilities", "Insurance", "Phone/Data"]);
+      const newLimits = {};
+      json.categories.forEach((cat, idx) => {
+        const cur = json.current_month_spending[idx] || 0;
+        const prev = json.previous_month_spending[idx] || 0;
+        const avg = prev > 0 ? (cur + prev) / 2 : cur;
+        if (fixedCats.has(cat)) {
+          newLimits[cat] = Math.round(cur > 0 ? cur : avg);
+        } else {
+          newLimits[cat] = Math.round(avg * 0.90);
+        }
+      });
+
+      const saveRes = await authFetch('/api/limits', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ limits: newLimits })
+      });
+      if (saveRes && saveRes.ok) {
+        await refreshAllDashboardPanels();
+        alert('Budget limits auto-calculated from actual spend (discretionary categories targeted at 90%) and saved!');
+      }
     });
-
-    if (res && res.ok) {
-      await refreshAllDashboardPanels();
-      alert('Budget limits saved successfully.');
-    } else {
-      alert('Failed to save budget limits.');
-    }
-  });
+  }
 }
 
 async function loadBudgetLimits() {
-  const res = await authFetch('/api/limits');
-  if (!res) return;
-  const json = await res.json();
-  const limits = json.limits || {};
+  const [resLimits, resMom] = await Promise.all([
+    authFetch('/api/limits'),
+    authFetch('/api/mom')
+  ]);
+  if (!resLimits) return;
+  const jsonLimits = await resLimits.json();
+  const limits = jsonLimits.limits || {};
+
+  const jsonMom = resMom ? await resMom.json() : null;
+  const currentSpending = {};
+  if (jsonMom && jsonMom.categories && jsonMom.current_month_spending) {
+    jsonMom.categories.forEach((cat, idx) => {
+      currentSpending[cat] = jsonMom.current_month_spending[idx] || 0;
+    });
+  }
 
   const grid = document.getElementById('limits-editor-container');
   if (!grid) return;
 
-  grid.innerHTML = Object.entries(limits).map(([cat, val]) => `
-    <div class="limit-item card" style="padding: 1rem; border: 1px solid var(--border); border-radius: 8px;">
-      <label style="font-weight: 600; display: block; margin-bottom: 0.4rem;">${escapeHtml(cat)}</label>
-      <div style="display: flex; align-items: center; gap: 0.4rem;">
-        <span style="font-weight: 600; color: var(--muted);">₹</span>
-        <input type="number" class="form-control" data-cat="${escapeHtml(cat)}" value="${val}" min="0">
+  let totalBudget = 0;
+  let totalSpent = 0;
+  let overLimitCount = 0;
+
+  Object.entries(limits).forEach(([cat, val]) => {
+    totalBudget += val;
+    const spent = currentSpending[cat] || 0;
+    totalSpent += spent;
+    if (val > 0 && spent > val) overLimitCount++;
+  });
+
+  const kpiTotal = document.getElementById('budget-kpi-total');
+  const kpiSpent = document.getElementById('budget-kpi-spent');
+  const kpiHealth = document.getElementById('budget-kpi-health');
+  const kpiHealthDesc = document.getElementById('budget-kpi-health-desc');
+
+  if (kpiTotal) kpiTotal.textContent = formatINR(totalBudget);
+  if (kpiSpent) kpiSpent.textContent = formatINR(totalSpent);
+  if (kpiHealth) {
+    if (overLimitCount === 0) {
+      kpiHealth.textContent = 'Healthy';
+      kpiHealth.className = 'kpi-value text-emerald';
+      if (kpiHealthDesc) kpiHealthDesc.textContent = 'All categories within budget';
+    } else {
+      kpiHealth.textContent = `${overLimitCount} Over Limit`;
+      kpiHealth.className = 'kpi-value text-red';
+      if (kpiHealthDesc) kpiHealthDesc.textContent = 'Review flagged categories';
+    }
+  }
+
+  grid.innerHTML = Object.entries(limits).map(([cat, val]) => {
+    const spent = currentSpending[cat] || 0;
+    const pct = val > 0 ? Math.round((spent / val) * 100) : 0;
+    const clampedPct = Math.min(100, pct);
+    const catCol = CATEGORY_COLORS[cat] || CATEGORY_COLORS['Other'];
+
+    let barClass = 'normal';
+    if (pct > 100) barClass = 'danger';
+    else if (pct >= 80) barClass = 'warning';
+
+    return `
+      <div class="budget-card">
+        <div class="budget-card-header">
+          <span class="badge" style="background:${catCol.bg};color:${catCol.text};font-weight:600;">
+            ${escapeHtml(cat)}
+          </span>
+          <span class="text-sm font-bold ${pct > 100 ? 'text-red' : (pct >= 80 ? 'text-amber' : 'text-emerald')}">
+            ${pct}%
+          </span>
+        </div>
+        <div class="budget-card-stats">
+          <span>Spent: <strong>${formatINR(spent)}</strong></span>
+          <span>Limit: <strong>${formatINR(val)}</strong></span>
+        </div>
+        <div class="budget-progress-track">
+          <div class="budget-progress-bar ${barClass}" style="width: ${clampedPct}%;"></div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 0.4rem; margin-top: 0.25rem;">
+          <span style="font-weight: 600; color: var(--muted); font-size: 0.85rem;">₹ Limit:</span>
+          <input type="number" class="form-control" data-cat="${escapeHtml(cat)}" value="${val}" min="0" style="padding: 0.35rem 0.5rem; font-size: 0.85rem;">
+        </div>
       </div>
-    </div>
-  `).join('');
+    `;
+  }).join('');
 }
 
 // ==========================================================================
@@ -1221,6 +1425,36 @@ function setupSimulatorTab() {
     });
   }
 
+  // Quick preset buttons for 1-click simulation
+  const presetChips = document.querySelectorAll('.btn-preset-chip');
+  presetChips.forEach(chip => {
+    chip.addEventListener('click', () => {
+      const type = chip.getAttribute('data-type');
+      const amount = chip.getAttribute('data-amount');
+      const rate = chip.getAttribute('data-rate');
+      const name = chip.getAttribute('data-name');
+
+      if (simType) {
+        simType.value = type;
+        simType.dispatchEvent(new Event('change'));
+      }
+      const amtInput = document.getElementById('sim-amount');
+      if (amtInput) amtInput.value = amount;
+      if (rate && document.getElementById('sim-rate')) {
+        document.getElementById('sim-rate').value = rate;
+      }
+      if (name && document.getElementById('sim-name')) {
+        document.getElementById('sim-name').value = name;
+      }
+      if (simDateInput && !simDateInput.value) {
+        simDateInput.value = '2026-11-20';
+      }
+      if (form) {
+        form.requestSubmit();
+      }
+    });
+  });
+
   if (form) {
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -1229,16 +1463,17 @@ function setupSimulatorTab() {
       const date = document.getElementById('sim-date').value || '2026-11-20';
       const interest_rate = parseFloat(document.getElementById('sim-rate').value) || 9.0;
       const buffer = parseFloat(document.getElementById('sim-buffer').value) || 10000.0;
+      const name = document.getElementById('sim-name') ? document.getElementById('sim-name').value.trim() : null;
 
       const res = await authFetch('/api/simulate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type, amount, date, interest_rate, buffer })
+        body: JSON.stringify({ type, amount, date, interest_rate, buffer, name })
       });
 
       if (res && res.ok) {
         const json = await res.json();
-        displaySimulatorResult(json.simulation, { type, amount, date, interest_rate });
+        displaySimulatorResult(json.simulation, { type, amount, date, interest_rate, name });
       } else {
         const err = await res.json();
         alert(err.detail || 'Simulation failed.');

@@ -37,6 +37,8 @@ from backend.persona import (
     save_user_limits,
     parse_and_ingest_csv,
     get_fixed_commitments,
+    save_custom_commitment,
+    delete_custom_commitment,
     get_mom_comparison,
     check_business_income_dip,
     plan_investment_goal,
@@ -111,6 +113,12 @@ class TransactionAddModel(BaseModel):
     description: str
     amount: float
     type: str = "debit"
+
+class CommitmentAddModel(BaseModel):
+    name: str
+    category: Optional[str] = "Other"
+    amount: float
+    day_of_month: Optional[int] = 5
 
 # --- Auth Endpoints (unprotected) ---
 @app.post("/api/auth/signup")
@@ -265,6 +273,23 @@ def get_commitments_route(user: dict = Depends(get_current_user)):
     persona = get_active_persona(user["id"])
     res = get_fixed_commitments(user["id"], persona)
     return {"status": "ok", **res}
+
+@app.post("/api/commitments")
+def add_commitment_route(data: CommitmentAddModel, user: dict = Depends(get_current_user)):
+    persona = get_active_persona(user["id"])
+    saved = save_custom_commitment(user["id"], persona, {
+        "name": data.name,
+        "category": data.category or "Other",
+        "amount": data.amount,
+        "day_of_month": data.day_of_month or 5
+    })
+    return {"status": "ok", "commitment": saved}
+
+@app.delete("/api/commitments/{name}")
+def delete_commitment_route(name: str, user: dict = Depends(get_current_user)):
+    persona = get_active_persona(user["id"])
+    success = delete_custom_commitment(user["id"], persona, name)
+    return {"status": "ok", "success": success}
 
 @app.get("/api/mom")
 def get_mom_route(user: dict = Depends(get_current_user)):

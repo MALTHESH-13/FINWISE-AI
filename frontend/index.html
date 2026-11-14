@@ -470,10 +470,14 @@
           </div>
 
           <div class="chat-chips-container" id="goals-chat-chips">
-            <button class="chip-btn" data-query="laptop 80k in 8 months">💻 laptop 80k in 8 months</button>
-            <button class="chip-btn" data-query="how much can I invest">📈 how much can I invest?</button>
-            <button class="chip-btn" data-query="am I saving enough">💰 am I saving enough?</button>
-            <button class="chip-btn" id="chip-biz-tips" data-query="tips to grow my business">🏬 tips to grow my business</button>
+            <button class="chip-btn" data-query="how can I save more money">💡 How can I save more money?</button>
+            <button class="chip-btn" data-query="what is my balance and status">📊 What is my balance & status?</button>
+            <button class="chip-btn" data-query="where did I spend the most money">🛒 Where did I spend the most?</button>
+            <button class="chip-btn" data-query="what bills are coming up">📅 What bills are due?</button>
+            <button class="chip-btn" data-query="how is my emergency fund">🛡️ Emergency runway</button>
+            <button class="chip-btn" data-query="laptop 80k in 8 months">💻 Laptop 80k in 8 months</button>
+            <button class="chip-btn" data-query="how much can I invest">📈 How much can I invest?</button>
+            <button class="chip-btn" id="chip-biz-tips" data-query="tips to grow my business">🏬 Business cashflow tips</button>
           </div>
 
           <div class="chat-messages" id="goals-chat-messages">
@@ -542,14 +546,39 @@
       <div class="card">
         <div class="card-header flex-between">
           <div>
-            <h3>Detected Recurring Commitments</h3>
-            <p class="text-muted text-sm">Regular outflows and subscriptions identified from your statement</p>
+            <h3>Recurring Commitments & Bills</h3>
+            <p class="text-muted text-sm">Monthly obligations, EMIs, utilities, and subscriptions detected from transactions or added manually</p>
+          </div>
+          <button type="button" class="btn btn-primary" id="btn-open-add-commitment">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            <span>+ Add Recurring Bill</span>
+          </button>
+        </div>
+
+        <div class="kpi-strip" style="margin-bottom: 1.25rem;">
+          <div class="kpi-card">
+            <span class="kpi-title">Total Monthly Commitments</span>
+            <span class="kpi-value text-red" id="rec-kpi-total">₹0</span>
+            <span class="kpi-desc">Fixed monthly outflow</span>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-title">Active Commitments</span>
+            <span class="kpi-value" id="rec-kpi-count">0</span>
+            <span class="kpi-desc">Recurring items tracked</span>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-title">Next Upcoming Bill</span>
+            <span class="kpi-value text-accent" id="rec-kpi-next">-</span>
+            <span class="kpi-desc" id="rec-kpi-next-desc">Earliest due date</span>
           </div>
         </div>
 
         <div class="table-responsive">
           <div id="recurring-tab-empty" class="panel-empty-state">
-            <p>Upload a bank statement to see this</p>
+            <p>No recurring commitments detected yet. Click "+ Add Recurring Bill" or upload a statement.</p>
           </div>
           <table class="data-table" id="recurring-tab-table" style="display: none;">
             <thead>
@@ -559,6 +588,7 @@
                 <th>Amount</th>
                 <th>Cadence</th>
                 <th>Day of Month</th>
+                <th style="width: 80px; text-align: center;">Action</th>
               </tr>
             </thead>
             <tbody></tbody>
@@ -573,13 +603,38 @@
         <div class="card-header flex-between">
           <div>
             <h3>Personalized Category Budget Limits</h3>
-            <p class="text-muted text-sm">Calculated from the last 3 full months of actual spend. User edits override.</p>
+            <p class="text-muted text-sm">Calculated from recent actual spend. Discretionary categories set at 90% target.</p>
           </div>
-          <button type="button" class="btn btn-primary" id="btn-save-limits">Save Limits</button>
+          <div style="display: flex; gap: 0.5rem;">
+            <button type="button" class="btn btn-secondary" id="btn-recalc-limits" title="Reset limits to 3-month actuals">
+              ⚡ Auto-Calculate
+            </button>
+            <button type="button" class="btn btn-primary" id="btn-save-limits">
+              Save Limits
+            </button>
+          </div>
         </div>
 
-        <div id="limits-editor-container" class="limits-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-top: 1rem;">
-          <!-- Dynamically populated category limit inputs -->
+        <div class="kpi-strip" style="margin-bottom: 1.25rem;">
+          <div class="kpi-card">
+            <span class="kpi-title">Total Budget Cap</span>
+            <span class="kpi-value text-accent" id="budget-kpi-total">₹0</span>
+            <span class="kpi-desc">Across all categories</span>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-title">Current Month Spent</span>
+            <span class="kpi-value" id="budget-kpi-spent">₹0</span>
+            <span class="kpi-desc">Actual debits tracked</span>
+          </div>
+          <div class="kpi-card">
+            <span class="kpi-title">Budget Health</span>
+            <span class="kpi-value text-emerald" id="budget-kpi-health">Healthy</span>
+            <span class="kpi-desc" id="budget-kpi-health-desc">Within limits</span>
+          </div>
+        </div>
+
+        <div id="limits-editor-container" class="limits-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-top: 1rem;">
+          <!-- Dynamically populated category limit inputs with progress bars -->
         </div>
       </div>
     </section>
@@ -591,7 +646,18 @@
           <h3>Deterministic What-If Simulator</h3>
           <p class="text-muted text-sm">Evaluate purchases, loan prepayments, or income changes against day-by-day cashflow for the rest of this month.</p>
 
-          <form id="simulator-form" style="margin-top: 1rem;">
+          <div class="simulator-presets" style="margin-top: 1rem; margin-bottom: 1rem;">
+            <span class="text-sm font-bold text-muted" style="display: block; margin-bottom: 0.4rem;">Quick What-If Presets:</span>
+            <div class="presets-row" style="display: flex; flex-wrap: wrap; gap: 0.4rem;">
+              <button type="button" class="btn-preset-chip" data-type="purchase" data-amount="60000" data-name="Laptop Purchase">💻 Buy Laptop (₹60k)</button>
+              <button type="button" class="btn-preset-chip" data-type="loan_emi" data-amount="15000" data-name="Car EMI">🚗 Car EMI (₹15k/mo)</button>
+              <button type="button" class="btn-preset-chip" data-type="prepay_loan" data-amount="50000" data-rate="9.0" data-name="Loan Prepayment">⚡ Prepay Loan (₹50k)</button>
+              <button type="button" class="btn-preset-chip" data-type="income_change" data-amount="15000" data-name="Salary Hike">📈 Income Raise (+₹15k)</button>
+              <button type="button" class="btn-preset-chip" data-type="cancel_subscription" data-amount="649" data-name="Netflix">❌ Cancel Netflix (₹649)</button>
+            </div>
+          </div>
+
+          <form id="simulator-form" style="margin-top: 0.5rem;">
             <div class="form-group">
               <label for="sim-type">Scenario Type</label>
               <select id="sim-type" class="form-control">
@@ -766,6 +832,49 @@
       </div>
     </div>
   </aside>
+
+  <!-- Add Commitment Modal -->
+  <div id="add-commitment-modal" class="modal-backdrop" style="display: none;">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3>Add Recurring Commitment</h3>
+        <p class="text-muted text-sm">Add fixed monthly bills, loan EMIs, rent, or subscriptions.</p>
+      </div>
+      <form id="add-commitment-form">
+        <div class="form-group">
+          <label for="comm-name">Commitment Name</label>
+          <input type="text" id="comm-name" class="form-control" required placeholder="e.g. Office Rent, Netflix, Car Loan EMI, Internet">
+        </div>
+        <div class="form-row">
+          <div class="form-group flex-1">
+            <label for="comm-category">Category</label>
+            <select id="comm-category" class="form-control">
+              <option value="Housing">Housing / Rent</option>
+              <option value="Loan/EMI">Loan / EMI</option>
+              <option value="Subscriptions">Subscriptions / OTT</option>
+              <option value="Utilities">Utilities (Power, Water)</option>
+              <option value="Phone/Data">Phone & Internet</option>
+              <option value="Insurance">Insurance</option>
+              <option value="Transport">Transport / Fuel</option>
+              <option value="Other">Other Fixed Cost</option>
+            </select>
+          </div>
+          <div class="form-group flex-1">
+            <label for="comm-amount">Monthly Amount (₹)</label>
+            <input type="number" id="comm-amount" class="form-control" required min="1" step="any" placeholder="e.g. 15000">
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="comm-day">Due Day of Month (1 - 31)</label>
+          <input type="number" id="comm-day" class="form-control" required min="1" max="31" value="5">
+        </div>
+        <div class="modal-footer" style="display: flex; gap: 0.75rem; justify-content: flex-end; margin-top: 1rem;">
+          <button type="button" class="btn btn-secondary" id="btn-close-commitment-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Commitment</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
   <!-- Floating Chat Assistant Widget -->
   <div class="chat-widget" id="chat-widget">
