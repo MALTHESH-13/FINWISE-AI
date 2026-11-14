@@ -5,7 +5,7 @@ import re
 from fastapi.testclient import TestClient
 
 # Ensure workspace is on sys.path
-sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+sys.path.insert(0, os.path.abspath(os.path.dirname(os.path.dirname(__file__))))
 
 from backend.main import app
 
@@ -19,7 +19,7 @@ def run_tests():
     # 1. Check prohibited terms in codebase
     print("\n[CHECK 1] Prohibited terms audit (0 occurrences allowed)...")
     prohibited = ["fore" + "cast", "monte" + " carlo", "back" + "test", "p" + "10", "p" + "50", "p" + "90"]
-    workspace = os.path.abspath(os.path.dirname(__file__))
+    workspace = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
     matched_files = []
 
     for root, dirs, files in os.walk(workspace):
