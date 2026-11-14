@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CashPilot - Intelligent Cashflow & Stress Testing</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="/chart.min.js"></script>
+</head>
+<body>
+  <!-- Header -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="logo-box">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+          <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+        </svg>
+      </div>
+      <div>
+        <h1 class="logo-title">CashPilot</h1>
+        <span class="logo-subtitle" id="header-persona-subtitle">Intelligent Cashflow Engine</span>
+      </div>
+    </div>
+
+    <div class="header-right">
+      <!-- Persona Switcher -->
+      <div class="persona-switch-group">
+        <span class="profile-label">Persona:</span>
+        <div class="btn-group" id="header-persona-switcher">
+          <button type="button" class="btn-pill" id="btn-persona-salaried" data-persona="salaried">Salaried</button>
+          <button type="button" class="btn-pill" id="btn-persona-business" data-persona="business">Small Business</button>
+        </div>
+        <button type="button" class="btn-profile-edit" id="btn-edit-profile" title="Edit Profile Details">⚙️</button>
+      </div>
+
+      <!-- Upload Button -->
+      <label class="btn-upload" title="Upload bank statement CSV">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+        </svg>
+        <span>Upload Statement</span>
+        <input type="file" id="csv-file-input" accept=".csv" style="display:none;">
+      </label>
+
+      <!-- User Profile & Logout -->
+      <div class="user-profile">
+        <div class="user-avatar" id="user-avatar">U</div>
+        <span class="user-name" id="user-display-name">User</span>
+        <button id="logout-btn" class="btn-logout" title="Log out">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>
+          </svg>
+          <span>Logout</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Persona Selection Landing Modal/Overlay (if no persona chosen) -->
+  <div id="persona-landing-modal" class="modal-backdrop" style="display: none;">
+    <div class="landing-card">
+      <div class="landing-header">
+        <h2>Welcome to CashPilot</h2>
+        <p class="text-muted">Select your financial profile to configure your personalized cashflow intelligence engine.</p>
+      </div>
+      <div class="persona-cards-grid">
+        <div class="persona-choice-card" id="card-choose-salaried">
+          <div class="card-icon">💼</div>
+          <h3>Salaried Professional</h3>
+          <p>Predictable monthly salary, recurring bills, EMIs, and discretionary budgeting. Plan savings goals and stress test large purchases.</p>
+          <button type="button" class="btn btn-primary btn-block">Select Salaried</button>
+        </div>
+        <div class="persona-choice-card" id="card-choose-business">
+          <div class="card-icon">🏬</div>
+          <h3>Small Business / Agency</h3>
+          <p>Variable revenue, client invoices, and rolling cash reserves. Includes the <strong>Income-Dip Priority Engine</strong> to protect essential payroll and rent.</p>
+          <button type="button" class="btn btn-primary btn-block">Select Small Business</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Profile Setup Modal (Blocking until saved) -->
+  <div id="profile-setup-modal" class="modal-backdrop" style="display: none;">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 id="setup-modal-title">Configure Profile</h3>
+        <p class="text-muted text-sm">Please set your profile baseline to unlock accurate forecasting and recommendations.</p>
+      </div>
+      <form id="profile-setup-form">
+        <div class="form-row">
+          <div class="form-group flex-1">
+            <label for="setup-name">Full Name</label>
+            <input type="text" id="setup-name" class="form-control" required placeholder="e.g. Jane Doe">
+          </div>
+          <div class="form-group flex-1">
+            <label for="setup-age">Age</label>
+            <input type="number" id="setup-age" class="form-control" placeholder="e.g. 30" min="18" max="100">
+          </div>
+        </div>
+
+        <!-- Salaried Fields -->
+        <div id="setup-salaried-fields">
+          <div class="form-group">
+            <label for="setup-salary">Fixed Monthly Salary (₹)</label>
+            <input type="number" id="setup-salary" class="form-control" min="0" placeholder="e.g. 75000">
+          </div>
+          <div class="form-row">
+            <div class="form-group flex-1">
+              <label for="setup-sec-income">Secondary Income Amount (₹)</label>
+              <input type="number" id="setup-sec-income" class="form-control" min="0" placeholder="e.g. 10000" value="0">
+            </div>
+            <div class="form-group flex-1">
+              <label for="setup-sec-label">Secondary Income Label</label>
+              <input type="text" id="setup-sec-label" class="form-control" placeholder="e.g. Consulting, Rental">
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="setup-salary-day">Salary Credit Day of Month</label>
+            <input type="number" id="setup-salary-day" class="form-control" min="1" max="31" value="1">
+          </div>
+        </div>
+
+        <!-- Business Fields -->
+        <div id="setup-business-fields" style="display: none;">
+          <div class="form-group">
+            <label for="setup-business-type">Business Type</label>
+            <input type="text" id="setup-business-type" class="form-control" placeholder="e.g. Digital Agency, Retail Store, Cafe">
+          </div>
+          <div class="form-group">
+            <label for="setup-safety-buffer">Safety Buffer: <span id="safety-buffer-val">15%</span></label>
+            <input type="range" id="setup-safety-buffer" class="form-control-range" min="0" max="0.40" step="0.05" value="0.15">
+            <small class="field-hint">Adjustable safety buffer (0% - 40%) applied to rolling revenue mean.</small>
+          </div>
+          
+          <div class="form-group">
+            <div class="flex-between">
+              <label>Last 3-12 Months Revenue History (₹)</label>
+              <button type="button" class="btn-sm btn-secondary" id="btn-add-revenue-row">+ Add Month</button>
+            </div>
+            <div id="revenue-history-rows" class="revenue-rows-list">
+              <!-- Dynamically populated or manually edited -->
+            </div>
+            <small class="field-hint">Auto-fills from uploaded statement credits when available.</small>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="submit" id="btn-save-profile" class="btn btn-primary btn-block">Save Profile & Continue</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Main Container -->
+  <main class="main-content">
+    <!-- Business Income Dip Priority Engine Banner (Small Business only) -->
+    <div id="business-dip-banner" class="dip-alert-banner" style="display: none;">
+      <div class="dip-icon">⚠️</div>
+      <div class="dip-content">
+        <div class="dip-title" id="dip-banner-title">Income Dip Detected</div>
+        <div class="dip-desc" id="dip-banner-desc">Projected current-month inflow falls short of your Baseline Stable Monthly Income. Review recommended priority cuts.</div>
+      </div>
+      <button type="button" class="btn btn-sm btn-warning" id="btn-view-dip-details">View Priority Cuts</button>
+    </div>
+
+    <!-- Navigation Tabs -->
+    <nav class="nav-tabs">
+      <button class="nav-tab active" data-tab="tab-dashboard">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+        </svg>
+        <span>Dashboard</span>
+      </button>
+      <button class="nav-tab" data-tab="tab-goals">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <path d="M12 6v6l4 2"></path>
+        </svg>
+        <span>Investments & Goals</span>
+      </button>
+      <button class="nav-tab" data-tab="tab-transactions">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="8" y1="6" x2="21" y2="6"></line>
+          <line x1="8" y1="12" x2="21" y2="12"></line>
+          <line x1="8" y1="18" x2="21" y2="18"></line>
+        </svg>
+        <span>Transactions</span>
+      </button>
+      <button class="nav-tab" data-tab="tab-recurring">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+        </svg>
+        <span>Recurring</span>
+      </button>
+      <button class="nav-tab" data-tab="tab-budget">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M12 1v22M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path>
+        </svg>
+        <span>Budget & Limits</span>
+      </button>
+      <button class="nav-tab" data-tab="tab-simulator">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01"></path>
+        </svg>
+        <span>Simulator</span>
+      </button>
+      <button class="nav-tab" data-tab="tab-accuracy">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+          <polyline points="22 4 12 14.01 9 11.01"></polyline>
+        </svg>
+        <span>Accuracy & Backtest</span>
+      </button>
+    </nav>
+
+    <!-- TAB 1: DASHBOARD -->
+    <section id="tab-dashboard" class="tab-pane active">
+      <!-- Drag & Drop Upload Banner -->
+      <div class="drag-drop-zone" id="dashboard-dropzone">
+        <div class="dropzone-inner">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+          </svg>
+          <div class="dropzone-text">
+            <strong>Drag and drop bank statement CSV here</strong> or click <em>Upload Statement</em> in header
+          </div>
+          <span class="text-sm text-muted">Auto-cleans merchant names & categorizes instantly without page reload</span>
+        </div>
+      </div>
+
+      <!-- Top Metrics Grid -->
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <div class="metric-header-flex">
+            <span class="metric-title" id="baseline-income-title">Baseline Stable Income</span>
+            <div class="tooltip-wrapper">
+              <span class="tooltip-trigger" id="baseline-tooltip-trigger">ⓘ</span>
+              <div class="tooltip-box" id="baseline-tooltip-box">
+                <strong id="tooltip-formula-title">Baseline Calculation</strong>
+                <p id="tooltip-formula-desc">Loading calculation details...</p>
+              </div>
+            </div>
+          </div>
+          <span class="metric-value text-accent" id="metric-baseline-income">₹0</span>
+          <span class="metric-hint" id="metric-baseline-hint">Configured monthly income floor</span>
+        </div>
+
+        <div class="metric-card">
+          <span class="metric-title">Fixed Commitments Total</span>
+          <span class="metric-value text-red" id="metric-commitments-total">₹0</span>
+          <span class="metric-hint" id="metric-commitments-count">0 recurring obligations</span>
+        </div>
+
+        <div class="metric-card">
+          <span class="metric-title">Projected 30-Day Min Balance</span>
+          <span class="metric-value" id="metric-min-balance">₹0</span>
+          <span class="metric-hint">Lowest projected liquidity point</span>
+        </div>
+
+        <div class="metric-card">
+          <span class="metric-title">Shortage Risk (P &lt; 0)</span>
+          <span class="metric-value text-emerald" id="metric-shortage-prob">0.0%</span>
+          <span class="metric-hint">Stochastic Monte Carlo (400 runs)</span>
+        </div>
+      </div>
+
+      <!-- Month-over-Month Category Comparison Card -->
+      <div class="card mom-card">
+        <div class="card-header flex-between">
+          <div>
+            <h3>Month-over-Month Category Comparison</h3>
+            <p class="text-muted text-sm">Previous Month vs Current Month with personalized budget limits</p>
+          </div>
+          <div class="chart-controls">
+            <div class="segmented-control" id="mom-chart-type-toggle">
+              <button type="button" class="segment-btn active" data-chart-type="bar">Grouped Bars</button>
+              <button type="button" class="segment-btn" data-chart-type="line">Trend Lines</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Overspent List -->
+        <div id="mom-overspent-container" class="overspent-badges-area" style="display: none;">
+          <span class="overspent-label">Over Budget Alerts:</span>
+          <div class="overspent-tags" id="mom-overspent-tags"></div>
+        </div>
+
+        <!-- Chart Container with min-height 280px -->
+        <div class="chart-container" style="min-height: 280px; position: relative;">
+          <div id="mom-chart-empty" class="panel-empty-state">
+            <p>Upload a bank statement to see this</p>
+          </div>
+          <canvas id="mom-chart-canvas"></canvas>
+        </div>
+      </div>
+
+      <!-- Fixed Monthly Commitments Section -->
+      <div class="card commitments-card">
+        <div class="card-header flex-between">
+          <div>
+            <h3>Fixed Monthly Commitments & Subscriptions</h3>
+            <p class="text-muted text-sm">Automatically detected recurring outflows and scheduled due dates</p>
+          </div>
+          <span class="badge badge-info" id="commitments-badge-total">Total: ₹0/mo</span>
+        </div>
+        <div class="table-responsive">
+          <div id="commitments-empty" class="panel-empty-state">
+            <p>Upload a bank statement to see this</p>
+          </div>
+          <table class="data-table" id="commitments-table" style="display: none;">
+            <thead>
+              <tr>
+                <th>Commitment</th>
+                <th>Category</th>
+                <th>Amount</th>
+                <th>Next Due Date</th>
+                <th>Days Left</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 30-Day Forecast Trajectory -->
+      <div class="card forecast-card">
+        <div class="card-header">
+          <h3>30-Day Cashflow Forecast Trajectory</h3>
+          <span class="badge badge-info">10th, 50th, 90th Percentiles</span>
+        </div>
+        <div class="chart-container" style="min-height: 280px; position: relative;">
+          <div id="forecast-empty" class="panel-empty-state">
+            <p>Upload a bank statement to see this</p>
+          </div>
+          <canvas id="forecast-chart-canvas"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: INVESTMENTS & GOALS (#/goals) -->
+    <section id="tab-goals" class="tab-pane">
+      <div class="goals-layout">
+        <!-- Goal Form on the Left -->
+        <div class="card goal-form-card">
+          <h3>Plan an Investment Goal</h3>
+          <p class="text-muted text-sm">Calculate required savings, SIP/RD vehicles, and budgeting cuts based on your real cashflow surplus.</p>
+          
+          <form id="goal-planner-form">
+            <div class="form-group">
+              <label for="goal-item-name">Goal / Item Name</label>
+              <input type="text" id="goal-item-name" class="form-control" required placeholder="e.g. Laptop, Bike, Emergency Fund" value="Laptop">
+            </div>
+            <div class="form-group">
+              <label for="goal-target-cost">Target Cost (₹)</label>
+              <input type="number" id="goal-target-cost" class="form-control" required placeholder="e.g. 80000" min="1000" value="80000">
+            </div>
+            <div class="form-row">
+              <div class="form-group flex-1">
+                <label for="goal-timeline-months">Timeline (Months)</label>
+                <input type="number" id="goal-timeline-months" class="form-control" required placeholder="e.g. 8" min="1" max="120" value="8">
+              </div>
+              <div class="form-group flex-1">
+                <label for="goal-current-savings">Current Savings (₹)</label>
+                <input type="number" id="goal-current-savings" class="form-control" placeholder="e.g. 10000" min="0" value="10000">
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="goal-custom-return">Expected Return (% p.a., Optional)</label>
+              <input type="number" id="goal-custom-return" class="form-control" placeholder="Auto based on horizon" step="0.1">
+              <small class="field-hint">Auto defaults: &lt;12m: 6.5% (RD/Liquid), 12-36m: 9% (Hybrid SIP), &gt;36m: 12% (Equity SIP)</small>
+            </div>
+            <button type="submit" id="btn-submit-goal" class="btn btn-primary btn-block">Generate Goal Roadmap</button>
+          </form>
+
+          <!-- Goal Roadmap Output Area -->
+          <div id="goal-roadmap-output" class="goal-roadmap-area" style="display: none;">
+            <div class="roadmap-verdict-box" id="goal-feasibility-box">
+              <h4 id="goal-feasibility-title">Feasibility Assessment</h4>
+              <p id="goal-feasibility-desc" class="text-sm"></p>
+            </div>
+
+            <div class="roadmap-stats-grid">
+              <div class="stat-box">
+                <span class="stat-lbl">Required Monthly Saving</span>
+                <span class="stat-val text-accent" id="goal-stat-monthly">₹0</span>
+              </div>
+              <div class="stat-box">
+                <span class="stat-lbl">Recommended Vehicle</span>
+                <span class="stat-val text-emerald" id="goal-stat-vehicle">SIP</span>
+              </div>
+              <div class="stat-box">
+                <span class="stat-lbl">Monthly SIP Needed</span>
+                <span class="stat-val" id="goal-stat-sip">₹0</span>
+              </div>
+            </div>
+            <div class="disclaimer-badge">Illustrative, not financial advice</div>
+
+            <!-- Budgeting Steps -->
+            <div class="budget-trim-section">
+              <h5>Budgeting Steps (From Your Real Expenses)</h5>
+              <div id="goal-budget-cuts-list" class="budget-cuts-list"></div>
+            </div>
+
+            <!-- Milestone Table -->
+            <div class="milestones-section">
+              <h5>Month-by-Month Milestone Table</h5>
+              <div class="table-responsive">
+                <table class="data-table" id="goal-milestones-table">
+                  <thead>
+                    <tr>
+                      <th>Month</th>
+                      <th>Deposit</th>
+                      <th>Projected Returns</th>
+                      <th>Cumulative Target</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Chat Panel on the Right -->
+        <div class="card goals-chat-card">
+          <div class="card-header flex-between">
+            <div class="chat-header-title">
+              <div class="chat-status-dot"></div>
+              <strong>CashPilot Financial Advisor</strong>
+            </div>
+            <span class="badge badge-info">Rule-Based Advisor</span>
+          </div>
+
+          <div class="chat-chips-container" id="goals-chat-chips">
+            <button class="chip-btn" data-query="laptop 80k in 8 months">💻 laptop 80k in 8 months</button>
+            <button class="chip-btn" data-query="how much can I invest">📈 how much can I invest?</button>
+            <button class="chip-btn" data-query="am I saving enough">💰 am I saving enough?</button>
+            <button class="chip-btn" id="chip-biz-tips" data-query="tips to grow my business">🏬 tips to grow my business</button>
+          </div>
+
+          <div class="chat-messages" id="goals-chat-messages">
+            <div class="chat-msg bot-msg">
+              <div class="msg-bubble">
+                👋 Welcome! Ask me about investment goals (e.g. <em>"laptop 80k in 8 months"</em>), investable surplus, or business cashflow advice.
+              </div>
+            </div>
+          </div>
+
+          <div class="typing-indicator" id="goals-typing-indicator" style="display: none;">
+            <span></span><span></span><span></span>
+          </div>
+
+          <form class="chat-input-bar" id="goals-chat-form">
+            <input type="text" id="goals-chat-input" placeholder="Ask: 'laptop 80k in 8 months' or 'how much can I invest'..." autocomplete="off">
+            <button type="submit" class="chat-send-btn">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="22" y1="2" x2="11" y2="13"></line>
+                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+              </svg>
+            </button>
+          </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: TRANSACTIONS -->
+    <section id="tab-transactions" class="tab-pane">
+      <div class="card transactions-card">
+        <div class="card-header transactions-header flex-between">
+          <div>
+            <h3>Account Transactions</h3>
+            <p class="text-muted text-sm">Cleaned merchant narration and standard categorization</p>
+          </div>
+          <div class="cleaning-toggle-group">
+            <span class="toggle-label">View Mode:</span>
+            <div class="segmented-control" id="narration-view-control">
+              <button type="button" class="segment-btn active" data-view="cleaned">Cleaned Merchant &rarr; Category</button>
+              <button type="button" class="segment-btn" data-view="raw">Raw Narration</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="table-responsive">
+          <div id="transactions-empty" class="panel-empty-state">
+            <p>Upload a bank statement to see this</p>
+          </div>
+          <table class="data-table" id="transactions-table" style="display: none;">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th id="th-merchant-desc">Cleaned Merchant &rarr; Category</th>
+                <th>Type</th>
+                <th class="text-right">Amount</th>
+              </tr>
+            </thead>
+            <tbody id="transactions-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: RECURRING -->
+    <section id="tab-recurring" class="tab-pane">
+      <div class="card">
+        <div class="card-header">
+          <h3>Recurring Obligations & Subscriptions</h3>
+          <p class="text-muted text-sm">Monthly detected recurring payments with due dates and cadence</p>
+        </div>
+        <div class="table-responsive">
+          <div id="recurring-empty" class="panel-empty-state">
+            <p>Upload a bank statement to see this</p>
+          </div>
+          <table class="data-table" id="recurring-full-table" style="display: none;">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Category</th>
+                <th>Typical Amount</th>
+                <th>Next Scheduled Due Date</th>
+                <th>Days Left</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 5: BUDGET & LIMITS -->
+    <section id="tab-budget" class="tab-pane">
+      <div class="card">
+        <div class="card-header flex-between">
+          <div>
+            <h3>Category Monthly Limits</h3>
+            <p class="text-muted text-sm">Customize your personalized spending limits per category</p>
+          </div>
+          <button type="button" class="btn btn-sm btn-primary" id="btn-save-limits">Save Limits</button>
+        </div>
+        <div id="limits-editor-grid" class="limits-grid">
+          <!-- Populated by app.js -->
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 6: SIMULATOR -->
+    <section id="tab-simulator" class="tab-pane">
+      <div class="simulator-layout">
+        <div class="card sim-form-card">
+          <h3>Stress Test a Decision</h3>
+          <p class="text-muted text-sm">Evaluate purchases, prepayments, and income adjustments against real cashflow.</p>
+          
+          <form id="simulator-form">
+            <div class="form-group">
+              <label for="sim-type">Scenario Type</label>
+              <select id="sim-type" class="form-control">
+                <option value="purchase">One-Time Purchase / Spend</option>
+                <option value="prepay_loan">Prepay Loan (Tenure & Interest Savings)</option>
+                <option value="loan_emi">New Loan (Add EMI)</option>
+                <option value="income_change">Income Change (Hike / Dip)</option>
+                <option value="cancel_subscription">Cancel Subscription</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="sim-amount">Amount (₹)</label>
+              <input type="number" id="sim-amount" class="form-control" placeholder="e.g. 60000" min="1" step="1" required value="60000">
+            </div>
+
+            <div class="form-group">
+              <label for="sim-date">Effective Date</label>
+              <input type="date" id="sim-date" class="form-control" required value="2026-11-16">
+            </div>
+
+            <div class="form-group" id="interest-rate-group" style="display: none;">
+              <label for="sim-interest-rate">Loan Interest Rate (% p.a.)</label>
+              <input type="number" id="sim-interest-rate" class="form-control" value="9.0" min="1" max="30" step="0.1">
+              <small class="field-hint">Used to compute interest saved and tenure reduction</small>
+            </div>
+
+            <button type="submit" id="run-sim-btn" class="btn btn-primary btn-block">Run Simulation</button>
+          </form>
+        </div>
+
+        <div class="sim-results-area" id="sim-results-area" style="display: none;">
+          <div class="verdict-banner" id="sim-verdict-banner">
+            <div class="verdict-icon" id="sim-verdict-icon">⚖️</div>
+            <div class="verdict-content">
+              <h4 id="sim-verdict-title">Verdict: Evaluating</h4>
+              <p id="sim-verdict-desc" class="text-sm"></p>
+            </div>
+          </div>
+
+          <!-- Prepay Loan Card -->
+          <div class="card prepay-card" id="prepay-summary-card" style="display: none;">
+            <div class="card-header">
+              <h3>⚡ Loan Prepayment Breakdown</h3>
+              <span class="badge badge-success">Interest Reduction</span>
+            </div>
+            <div class="prepay-stats-grid">
+              <div class="stat-box">
+                <span class="stat-lbl">Immediate Cash Dip</span>
+                <span class="stat-val text-red" id="prepay-cash-dip">₹0</span>
+              </div>
+              <div class="stat-box">
+                <span class="stat-lbl">Total Interest Saved</span>
+                <span class="stat-val text-emerald" id="prepay-interest-saved">₹0</span>
+              </div>
+              <div class="stat-box">
+                <span class="stat-lbl">Tenure Reduced</span>
+                <span class="stat-val" id="prepay-tenure-reduced">0 months</span>
+              </div>
+              <div class="stat-box">
+                <span class="stat-lbl">Assumed Interest Rate</span>
+                <span class="stat-val" id="prepay-assumed-rate">9.0% p.a.</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="metrics-grid">
+            <div class="metric-card">
+              <span class="metric-title">Projected Min Balance</span>
+              <div class="metric-compare">
+                <span class="compare-old" id="sim-min-before">₹0</span>
+                <span class="compare-arrow">→</span>
+                <span class="compare-new" id="sim-min-after">₹0</span>
+              </div>
+            </div>
+            <div class="metric-card">
+              <span class="metric-title">Shortage Probability</span>
+              <div class="metric-compare">
+                <span class="compare-old" id="sim-prob-before">0%</span>
+                <span class="compare-arrow">→</span>
+                <span class="compare-new" id="sim-prob-after">0%</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Bill-Level Stress Test Table -->
+          <div class="card obligations-card">
+            <div class="card-header">
+              <h3>Bill-Level Stress Test</h3>
+              <span class="text-sm text-muted">P(Balance &ge; Bill Amount on Due Date)</span>
+            </div>
+            <div class="table-responsive">
+              <table class="data-table" id="sim-obligations-table">
+                <thead>
+                  <tr>
+                    <th>Obligation</th>
+                    <th>Due Date</th>
+                    <th>Amount</th>
+                    <th>Prob Before</th>
+                    <th>Prob After</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 7: ACCURACY & BACKTEST -->
+    <section id="tab-accuracy" class="tab-pane">
+      <div class="metrics-grid">
+        <div class="metric-card">
+          <span class="metric-title">Backtest Forecast Accuracy</span>
+          <span class="metric-value text-emerald" id="acc-accuracy-rate">94.2%</span>
+          <span class="metric-hint">Historical 60-day prediction validation</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-title">Mean Absolute Error (MAPE)</span>
+          <span class="metric-value text-accent" id="acc-mape">5.8%</span>
+          <span class="metric-hint">Variance vs actual ledger balance</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-title">Within 90% Confidence Interval</span>
+          <span class="metric-value" id="acc-interval">96.5%</span>
+          <span class="metric-hint">Days falling within P10-P90 bounds</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3>Detected Spending Anomalies & Outliers</h3>
+          <p class="text-muted text-sm">Transactions deviating significantly (&gt; 2.2&sigma;) from historical patterns</p>
+        </div>
+        <div class="table-responsive">
+          <div id="anomalies-empty" class="panel-empty-state">
+            <p>Upload a bank statement to see this</p>
+          </div>
+          <table class="data-table" id="anomalies-table" style="display: none;">
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Merchant</th>
+                <th>Category</th>
+                <th>Amount</th>
+                <th>Expected Threshold</th>
+                <th>Severity</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Floating Chat Assistant Widget -->
+  <div class="chat-widget" id="chat-widget">
+    <button class="chat-trigger-btn" id="chat-trigger-btn" aria-label="Open CashPilot Chat Assistant">
+      <svg class="chat-icon-open" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+      </svg>
+      <svg class="chat-icon-close" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none;">
+        <line x1="18" y1="6" x2="6" y2="18"></line>
+        <line x1="6" y1="6" x2="18" y2="18"></line>
+      </svg>
+    </button>
+
+    <div class="chat-window" id="chat-window" style="display: none;">
+      <div class="chat-header">
+        <div class="chat-header-title">
+          <div class="chat-status-dot"></div>
+          <div>
+            <strong>CashPilot Copilot</strong>
+            <span class="chat-header-badge">Rule-Based Assistant</span>
+          </div>
+        </div>
+        <button class="chat-close-btn" id="chat-close-btn">&times;</button>
+      </div>
+
+      <div class="chat-chips-container" id="chat-chips">
+        <button class="chip-btn" data-query="If I buy a laptop for 60k on Monday, can I pay rent?">💻 Buy laptop 60k on Monday</button>
+        <button class="chip-btn" data-query="laptop 80k in 8 months">🎯 laptop 80k in 8 months</button>
+        <button class="chip-btn" data-query="Will I run out of money?">📉 Will I run out of money?</button>
+        <button class="chip-btn" data-query="What if I prepay 50k on my loan next week?">⚡ Prepay 50k on loan</button>
+      </div>
+
+      <div class="chat-messages" id="chat-messages">
+        <div class="chat-msg bot-msg">
+          <div class="msg-bubble">
+            👋 Hi! I'm your CashPilot Copilot. Ask me what-if scenarios, goal planning (e.g. <em>"laptop 80k in 8 months"</em>), or cashflow questions.
+          </div>
+        </div>
+      </div>
+
+      <div class="typing-indicator" id="typing-indicator" style="display: none;">
+        <span></span><span></span><span></span>
+      </div>
+
+      <form class="chat-input-bar" id="chat-form">
+        <input type="text" id="chat-input" placeholder="Ask: 'If I buy a laptop for 60k on Monday...' or goal" autocomplete="off">
+        <button type="submit" id="chat-send-btn" class="chat-send-btn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+          </svg>
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
