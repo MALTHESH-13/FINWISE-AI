@@ -419,14 +419,29 @@ def chat_route(data: ChatModel, user: dict = Depends(get_current_user)):
     res = handle_chat_message(user["id"], data.message, data.history)
     return res
 
-# --- Static Frontend Serving ---
+# --- Cache Control Middleware & Static Frontend Serving ---
+@app.middleware("http")
+async def add_no_cache_headers(request: Request, call_next):
+    response = await call_next(request)
+    if any(request.url.path.endswith(ext) for ext in [".html", ".js", ".css"]) or request.url.path in ["/", "/login.html"]:
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 @app.get("/login.html")
 def serve_login():
-    return FileResponse(os.path.join(FRONTEND_DIR, "login.html"))
+    return FileResponse(
+        os.path.join(FRONTEND_DIR, "login.html"),
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+    )
 
 @app.get("/")
 def serve_root():
-    return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
+    return FileResponse(
+        os.path.join(FRONTEND_DIR, "index.html"),
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
+    )
 
 if os.path.exists(FRONTEND_DIR):
     app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="static")
