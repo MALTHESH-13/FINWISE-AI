@@ -67,11 +67,20 @@ function escapeHtml(str) {
     .replace(/'/g, '&#039;');
 }
 
-// Global authenticated fetch with 401 redirect
+// Global authenticated fetch with Bearer token, Cookie fallback and 401 redirect
 async function authFetch(url, options = {}) {
+  const token = localStorage.getItem('cashpilot_token');
+  const headers = options.headers ? { ...options.headers } : {};
+  if (token && !headers['Authorization']) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  options.headers = headers;
+
   try {
     const res = await fetch(url, options);
     if (res.status === 401) {
+      localStorage.removeItem('cashpilot_token');
+      localStorage.removeItem('cashpilot_user');
       window.location.href = '/login.html';
       return null;
     }
@@ -143,6 +152,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Setup logout
   document.getElementById('logout-btn').addEventListener('click', async () => {
+    localStorage.removeItem('cashpilot_token');
+    localStorage.removeItem('cashpilot_user');
     await authFetch('/api/auth/logout', { method: 'POST' });
     window.location.href = '/login.html';
   });

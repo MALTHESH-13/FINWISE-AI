@@ -111,6 +111,13 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
+      if (data.token) {
+        localStorage.setItem('cashpilot_token', data.token);
+      }
+      if (data.user) {
+        localStorage.setItem('cashpilot_user', JSON.stringify(data.user));
+      }
+
       // Success - redirect to dashboard
       window.location.href = '/';
     } catch (err) {
@@ -133,6 +140,12 @@ document.addEventListener('DOMContentLoaded', () => {
         showError(data.detail || 'Could not log in with demo account.');
         setLoading(false);
         return;
+      }
+      if (data.token) {
+        localStorage.setItem('cashpilot_token', data.token);
+      }
+      if (data.user) {
+        localStorage.setItem('cashpilot_user', JSON.stringify(data.user));
       }
       window.location.href = '/';
     } catch (err) {

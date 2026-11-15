@@ -130,8 +130,8 @@ def signup(data: SignupModel, response: Response):
         raise HTTPException(status_code=400, detail="An account with this email already exists")
 
     user = create_user(data.name.strip(), data.email.strip().lower(), data.password)
-    set_auth_cookie(response, user["id"])
-    return {"status": "ok", "user": user}
+    token = set_auth_cookie(response, user["id"], user["name"], user["email"])
+    return {"status": "ok", "token": token, "user": user}
 
 @app.post("/api/auth/login")
 def login(data: LoginModel, response: Response):
@@ -145,8 +145,8 @@ def login(data: LoginModel, response: Response):
         raise HTTPException(status_code=400, detail="Invalid email or password")
 
     clear_failed_attempts(email_clean)
-    set_auth_cookie(response, user["id"])
-    return {"status": "ok", "user": {"id": user["id"], "name": user["name"], "email": user["email"]}}
+    token = set_auth_cookie(response, user["id"], user["name"], user["email"])
+    return {"status": "ok", "token": token, "user": {"id": user["id"], "name": user["name"], "email": user["email"]}}
 
 @app.post("/api/auth/logout")
 def logout(response: Response):
@@ -162,8 +162,8 @@ def login_demo(response: Response):
     user = get_user_by_email("demo@cashpilot.app")
     if not user:
         user = create_user("Demo User", "demo@cashpilot.app", "demo1234")
-    set_auth_cookie(response, user["id"])
-    return {"status": "ok", "user": {"id": user["id"], "name": user["name"], "email": user["email"]}}
+    token = set_auth_cookie(response, user["id"], user["name"], user["email"])
+    return {"status": "ok", "token": token, "user": {"id": user["id"], "name": user["name"], "email": user["email"]}}
 
 # --- Persona & Onboarding Endpoints ---
 @app.get("/api/persona")
